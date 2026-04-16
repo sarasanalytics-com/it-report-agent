@@ -3,21 +3,15 @@ name: IT Monthly Report
 on:
   schedule:
     - cron: "30 3 1 * *" # 1st of every month, 9:00 AM IST (UTC+5:30)
-  workflow_dispatch:
-    inputs:
-      custom_prompt:
-        description: "Optional: override the default prompt (for ad-hoc queries)"
-        required: false
-        type: string
+  workflow_dispatch: {}
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   generate-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -47,29 +41,19 @@ jobs:
       - name: Validate Excel files
         run: python scripts/validate-data.py
 
-      # ── 3. Create output directory ──
-      - name: Create output directory
-        run: mkdir -p output
-
-      # ── 4. Generate report with Claude ──
+      # ── 3. Generate report (pure Python, no API calls) ──
       - name: Generate monthly report
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          show_full_output: true
-          claude_args: "--allowedTools 'Read' 'Write' 'Edit' 'Bash'"
-          prompt: |
-            ${{ inputs.custom_prompt || 'Read the file prompts/monthly-report.md for instructions. Read the Excel files in data/ directory. Generate the monthly IT report and write two files: output/slack-summary.md (concise Slack summary) and output/full-report.md (detailed ClickUp doc). After writing, run ls -la output/ to confirm both files exist.' }}
+        run: python scripts/generate-report.py monthly
 
-      # ── 5. Post summary to Slack ──
-      - name: Post to Slack #it-reports
+      # ── 4. Post summary to Slack ──
+      - name: Post to Slack
         run: python scripts/post-to-slack.py output/slack-summary.md
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
 
-      # ── 6. Create ClickUp doc ──
-      - name: Create ClickUp doc
+      # ── 5. Create ClickUp task with full report ──
+      - name: Create ClickUp report
         run: |
           MONTH_YEAR=$(date -u +"%B %Y")
           python scripts/create-clickup-doc.py \
@@ -80,7 +64,7 @@ jobs:
           CLICKUP_WORKSPACE_ID: ${{ secrets.CLICKUP_WORKSPACE_ID }}
           CLICKUP_SPACE_ID: ${{ secrets.CLICKUP_SPACE_ID }}
 
-      # ── 7. Upload reports as artifacts ──
+      # ── 6. Upload reports as artifacts ──
       - name: Upload report artifacts
         if: always()
         uses: actions/upload-artifact@v4
