@@ -52,8 +52,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
+          allowed_tools: "Read,Write,Edit,Glob,Grep,Bash"
           prompt: |
-            ${{ inputs.custom_prompt || 'Read the prompt in prompts/weekly-report.md, then read the Excel files in data/ using the xlsx skill and generate the weekly IT report. Save the Slack summary to output/slack-summary.md and the full report to output/full-report.md.' }}
+            ${{ inputs.custom_prompt || 'Read the prompt in prompts/weekly-report.md, then read the Excel files in data/ and generate the weekly IT report. First create the output directory with mkdir -p output, then save the Slack summary to output/slack-summary.md and the full report to output/full-report.md. Verify the files exist after writing them.' }}
 
       # ── 4. Post summary to Slack ──
       - name: Post to Slack #it-reports
