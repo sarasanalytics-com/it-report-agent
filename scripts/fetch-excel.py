@@ -81,7 +81,7 @@ def download_file(token: str, drive_id: str, file_path: str, dest: pathlib.Path)
     # URL-encode each path segment while preserving folder separators
     parts = file_path.split("/")
     encoded_parts = [urllib.parse.quote(p) for p in parts]
-    encoded = ":/".join(encoded_parts) if len(encoded_parts) > 1 else encoded_parts[0]
+    encoded = "/".join(encoded_parts)
     url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{encoded}:/content"
     resp = requests.get(
         url,
