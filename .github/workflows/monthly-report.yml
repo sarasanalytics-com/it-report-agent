@@ -45,24 +45,22 @@ jobs:
       - name: Generate monthly report
         run: python scripts/generate-report.py monthly
 
-      # ── 4. Post summary to Slack ──
+      # ── 4. Convert full report to Word document ──
+      - name: Generate Word document
+        run: |
+          MONTH_YEAR=$(date -u +"%B-%Y")
+          python scripts/generate-docx.py \
+            output/full-report.md \
+            "output/IT-Monthly-Report-${MONTH_YEAR}.docx"
+
+      # ── 5. Post summary + Word doc to Slack ──
       - name: Post to Slack
-        run: python scripts/post-to-slack.py output/slack-summary.md
+        run: |
+          DOCX_FILE=$(ls output/*.docx 2>/dev/null | head -1)
+          python scripts/post-to-slack.py output/slack-summary.md ${DOCX_FILE:+"$DOCX_FILE"}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
-
-      # ── 5. Create ClickUp task with full report ──
-      - name: Create ClickUp report
-        run: |
-          MONTH_YEAR=$(date -u +"%B %Y")
-          python scripts/create-clickup-doc.py \
-            output/full-report.md \
-            "IT Monthly Report - ${MONTH_YEAR}"
-        env:
-          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
-          CLICKUP_WORKSPACE_ID: ${{ secrets.CLICKUP_WORKSPACE_ID }}
-          CLICKUP_SPACE_ID: ${{ secrets.CLICKUP_SPACE_ID }}
 
       # ── 6. Upload reports as artifacts ──
       - name: Upload report artifacts
