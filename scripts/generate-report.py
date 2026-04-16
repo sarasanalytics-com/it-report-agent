@@ -62,6 +62,18 @@ def fmt_usd(amount) -> str:
     return f"${n:,.2f}"
 
 
+def fmt_inr(amount) -> str:
+    try:
+        n = float(amount)
+    except (TypeError, ValueError):
+        return "N/A"
+    if n >= 10_000_000:
+        return f"₹{n/10_000_000:,.2f} Cr"
+    if n >= 100_000:
+        return f"₹{n/100_000:,.2f} L"
+    return f"₹{n:,.0f}"
+
+
 def read_sheet(wb, sheet_name: str, header_row: int = 1) -> list[dict]:
     """Read a sheet into a list of dicts. Returns [] if sheet missing."""
     if sheet_name not in wb.sheetnames:
@@ -202,13 +214,9 @@ def get_laptop_spend(data: dict) -> dict:
     abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
 
     result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
-    if data["actual_spend"]:
-        print(f"  [DEBUG] Actual Spends columns: {list(data['actual_spend'][0].keys())}")
-        print(f"  [DEBUG] Looking for month abbrevs: {abbrevs}")
-    else:
-        print("  [DEBUG] Actual Spends sheet is empty")
     for row in data["actual_spend"]:
-        model = row.get("Model", "")
+        # First column may be named "col_0" if header cell is blank; treat it as Model
+        model = row.get("Model") or row.get("col_0", "")
         if not model or str(model).strip().lower() in ("", "none", "total"):
             continue
 
@@ -274,12 +282,6 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
                 break
         if month_key:
             break
-
-    if data["spend"]:
-        print(f"  [DEBUG] Spend tracker columns: {list(data['spend'][0].keys())}")
-        print(f"  [DEBUG] Matched month_key: {month_key}")
-        hw_rows = [str(r.get("APPLICATION / SW / LICENSE", "")) for r in data["spend"] if _is_hardware_row(r)]
-        print(f"  [DEBUG] Hardware rows excluded: {hw_rows}")
 
     total = 0.0
     if month_key:
@@ -365,9 +367,9 @@ def generate_weekly_slack(data: dict) -> str:
     lines.append(f"\n*5. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
     if laptop_spend["models"]:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
-        lines.append(f"• Laptop spend this month: {fmt_usd(laptop_spend['total_spend'])}")
+        lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
         for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_usd(m['spend'])}")
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_inr(m['spend'])}")
     else:
         lines.append("• No laptop procurement data for this month")
     if purchases:
@@ -464,11 +466,11 @@ def generate_weekly_full(data: dict) -> str:
     lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
     if laptop_spend["models"]:
         lines.append(f"**Joiners this month:** {laptop_spend['total_joiners']}  ")
-        lines.append(f"**Laptop spend this month:** {fmt_usd(laptop_spend['total_spend'])}\n")
+        lines.append(f"**Laptop spend this month:** {fmt_inr(laptop_spend['total_spend'])}\n")
         lines.append("| Model | Joiners | Spend |")
         lines.append("|-------|---------|-------|")
         for m in laptop_spend["models"]:
-            lines.append(f"| {m['model']} | {m['joiners']} | {fmt_usd(m['spend'])} |")
+            lines.append(f"| {m['model']} | {m['joiners']} | {fmt_inr(m['spend'])} |")
     else:
         lines.append("No laptop procurement data for this month.\n")
     if purchases:
@@ -518,7 +520,7 @@ def generate_weekly_full(data: dict) -> str:
     lines.append(f"| Backup Laptops (3yr+) | {len(data['backup'])} |")
     lines.append(f"| Average Laptop Age | {avg_age} years |")
     lines.append(f"| Laptops > 3.5yr | {len(aging)} |")
-    lines.append(f"| Laptop Spend This Month | {fmt_usd(laptop_spend['total_spend'])} |")
+    lines.append(f"| Laptop Spend This Month | {fmt_inr(laptop_spend['total_spend'])} |")
     lines.append(f"| App Spend This Month | {fmt_usd(total_spend)} |")
     lines.append(f"| Upcoming Joiners (30d) | {len(joiners)} |")
 
@@ -560,9 +562,9 @@ def generate_monthly_slack(data: dict) -> str:
     lines.append(f"\n*4. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
     if laptop_spend["models"]:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
-        lines.append(f"• Laptop spend this month: {fmt_usd(laptop_spend['total_spend'])}")
+        lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
         for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_usd(m['spend'])}")
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_inr(m['spend'])}")
     else:
         lines.append("• No laptop procurement data for this month")
     if purchases:
@@ -625,7 +627,7 @@ def generate_monthly_full(data: dict) -> str:
             price = row.get("Avg Price/Laptop (INR) (As per current market price)", "")
             total = row.get("Total Price (INR)", "")
             if dept and model:
-                lines.append(f"| {dept} | {model} | {qty} | {fmt_usd(price)} | {fmt_usd(total)} |")
+                lines.append(f"| {dept} | {model} | {qty} | {fmt_inr(price)} | {fmt_inr(total)} |")
 
     # Onboarding checklist status
     lines.append(f"\n## 9. Onboarding Checklist Status\n")
