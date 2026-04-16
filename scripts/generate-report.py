@@ -202,6 +202,11 @@ def get_laptop_spend(data: dict) -> dict:
     abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
 
     result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
+    if data["actual_spend"]:
+        print(f"  [DEBUG] Actual Spends columns: {list(data['actual_spend'][0].keys())}")
+        print(f"  [DEBUG] Looking for month abbrevs: {abbrevs}")
+    else:
+        print("  [DEBUG] Actual Spends sheet is empty")
     for row in data["actual_spend"]:
         model = row.get("Model", "")
         if not model or str(model).strip().lower() in ("", "none", "total"):
@@ -269,6 +274,12 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
                 break
         if month_key:
             break
+
+    if data["spend"]:
+        print(f"  [DEBUG] Spend tracker columns: {list(data['spend'][0].keys())}")
+        print(f"  [DEBUG] Matched month_key: {month_key}")
+        hw_rows = [str(r.get("APPLICATION / SW / LICENSE", "")) for r in data["spend"] if _is_hardware_row(r)]
+        print(f"  [DEBUG] Hardware rows excluded: {hw_rows}")
 
     total = 0.0
     if month_key:
