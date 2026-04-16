@@ -187,6 +187,66 @@ def get_age_distribution(data: dict) -> dict:
     return buckets
 
 
+def get_laptop_spend(data: dict) -> dict:
+    """Extract laptop procurement spend from Actual Spends sheet.
+
+    The sheet has columns like: Model, Joiners, Jan Joiners, Jan Spend,
+    Feb Joiners, Feb Spend, March Joiners, Mar Spend, etc.
+    Returns dict with keys: models (list of per-model data), total_joiners, total_spend.
+    """
+    MONTH_ABBREVS = {
+        1: ["jan"], 2: ["feb"], 3: ["mar", "march"], 4: ["apr", "april"],
+        5: ["may"], 6: ["jun", "june"], 7: ["jul", "july"], 8: ["aug"],
+        9: ["sep", "sept"], 10: ["oct"], 11: ["nov"], 12: ["dec"],
+    }
+    abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
+
+    result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
+    for row in data["actual_spend"]:
+        model = row.get("Model", "")
+        if not model or str(model).strip().lower() in ("", "none", "total"):
+            continue
+
+        # Find joiners and spend columns for current month
+        joiners = 0
+        spend = 0.0
+        for key, val in row.items():
+            key_lower = str(key).strip().lower()
+            for abbr in abbrevs:
+                if abbr in key_lower and "joiner" in key_lower:
+                    joiners = int(val) if val and str(val).strip() not in ("", "None") else 0
+                elif abbr in key_lower and "spend" in key_lower:
+                    spend = float(val) if val and str(val).strip() not in ("", "None") else 0.0
+
+        if joiners or spend:
+            result["models"].append({
+                "model": str(model).strip(),
+                "joiners": joiners,
+                "spend": spend,
+            })
+            result["total_joiners"] += joiners
+            result["total_spend"] += spend
+
+    return result
+
+
+def get_recent_purchases(data: dict, days: int = 30) -> list[dict]:
+    """Get laptops purchased within the given number of days."""
+    cutoff = TODAY - timedelta(days=days)
+    purchases = []
+    for row in data["purchased"]:
+        d = parse_date(row.get("Warranty Start Date"))
+        if d and d >= cutoff:
+            purchases.append({
+                "brand": row.get("Brand", ""),
+                "model": row.get("Model", ""),
+                "serial": row.get("Serial no", ""),
+                "date": d,
+            })
+    purchases.sort(key=lambda x: x["date"], reverse=True)
+    return purchases
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
     """Get total app spend for current month and upcoming renewals."""
     # Find the column matching current month
@@ -274,17 +334,33 @@ def generate_weekly_slack(data: dict) -> str:
     for a in aging[:5]:
         lines.append(f"• {a['employee']} — {a['make']} {a['model']} ({a['age_years']}yr, {a['priority']})")
 
-    # 5. Spend
+    # 5. Laptop Procurement
+    laptop_spend = get_laptop_spend(data)
+    purchases = get_recent_purchases(data, 7)
+    lines.append(f"\n*5. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
+    if laptop_spend["models"]:
+        lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
+        lines.append(f"• Laptop spend this month: {fmt_usd(laptop_spend['total_spend'])}")
+        for m in laptop_spend["models"]:
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_usd(m['spend'])}")
+    else:
+        lines.append("• No laptop procurement data for this month")
+    if purchases:
+        lines.append(f"• New laptops purchased this week: {len(purchases)}")
+        for p in purchases[:3]:
+            lines.append(f"  - {p['brand']} {p['model']} ({p['date'].strftime('%d %b')})")
+
+    # 6. App Spend
     total_spend, renewals = get_current_month_spend(data)
-    lines.append(f"\n*5. App Spend — {TODAY.strftime('%B %Y')}*")
+    lines.append(f"\n*6. App Spend — {TODAY.strftime('%B %Y')}*")
     lines.append(f"• Total this month: {fmt_usd(total_spend)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
     for r in renewals[:3]:
         lines.append(f"  - {r['app']} ({r['date'].strftime('%d %b')})")
 
-    # 6. Upcoming Joiners
+    # 7. Upcoming Joiners
     joiners = get_upcoming_joiners(data, 14)
-    lines.append(f"\n*6. Upcoming Joiners (next 14 days)* ({len(joiners)})")
+    lines.append(f"\n*7. Upcoming Joiners (next 14 days)* ({len(joiners)})")
     for j in joiners[:5]:
         lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ: {j['doj'].strftime('%d %b')})")
     if not joiners:
@@ -357,9 +433,29 @@ def generate_weekly_full(data: dict) -> str:
     for bracket, count in dist.items():
         lines.append(f"| {bracket} | {count} |")
 
-    # Spend
+    # Laptop Procurement
+    laptop_spend = get_laptop_spend(data)
+    purchases = get_recent_purchases(data, 30)
+    lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
+    if laptop_spend["models"]:
+        lines.append(f"**Joiners this month:** {laptop_spend['total_joiners']}  ")
+        lines.append(f"**Laptop spend this month:** {fmt_usd(laptop_spend['total_spend'])}\n")
+        lines.append("| Model | Joiners | Spend |")
+        lines.append("|-------|---------|-------|")
+        for m in laptop_spend["models"]:
+            lines.append(f"| {m['model']} | {m['joiners']} | {fmt_usd(m['spend'])} |")
+    else:
+        lines.append("No laptop procurement data for this month.\n")
+    if purchases:
+        lines.append(f"\n### New Laptops Purchased ({len(purchases)})\n")
+        lines.append("| Brand | Model | Serial | Purchase Date |")
+        lines.append("|-------|-------|--------|---------------|")
+        for p in purchases:
+            lines.append(f"| {p['brand']} | {p['model']} | {p['serial']} | {p['date'].strftime('%d %b %Y')} |")
+
+    # App Spend
     total_spend, renewals = get_current_month_spend(data)
-    lines.append(f"\n## 5. App Spend — {TODAY.strftime('%B %Y')}\n")
+    lines.append(f"\n## 6. App Spend — {TODAY.strftime('%B %Y')}\n")
     lines.append(f"**Total this month:** {fmt_usd(total_spend)}\n")
     if renewals:
         lines.append("### Upcoming Renewals (next 30 days)\n")
@@ -370,7 +466,7 @@ def generate_weekly_full(data: dict) -> str:
 
     # Joiners
     joiners = get_upcoming_joiners(data, 30)
-    lines.append(f"\n## 6. Upcoming Joiners (next 30 days) — {len(joiners)}\n")
+    lines.append(f"\n## 7. Upcoming Joiners (next 30 days) — {len(joiners)}\n")
     if joiners:
         lines.append("| Name | Department | Designation | DOJ |")
         lines.append("|------|------------|-------------|-----|")
@@ -389,7 +485,7 @@ def generate_weekly_full(data: dict) -> str:
             age_count += 1
     avg_age = round(avg_age / age_count, 1) if age_count else 0
 
-    lines.append("\n## 7. Summary\n")
+    lines.append("\n## 8. Summary\n")
     lines.append(f"| Metric | Value |")
     lines.append(f"|--------|-------|")
     lines.append(f"| Total Laptops Assigned | {total_assigned} |")
@@ -397,6 +493,7 @@ def generate_weekly_full(data: dict) -> str:
     lines.append(f"| Backup Laptops (3yr+) | {len(data['backup'])} |")
     lines.append(f"| Average Laptop Age | {avg_age} years |")
     lines.append(f"| Laptops > 3.5yr | {len(aging)} |")
+    lines.append(f"| Laptop Spend This Month | {fmt_usd(laptop_spend['total_spend'])} |")
     lines.append(f"| App Spend This Month | {fmt_usd(total_spend)} |")
     lines.append(f"| Upcoming Joiners (30d) | {len(joiners)} |")
 
@@ -432,32 +529,46 @@ def generate_monthly_slack(data: dict) -> str:
     for bracket, count in dist.items():
         lines.append(f"• {bracket}: {count}")
 
-    # 4. Spend
+    # 4. Laptop Procurement
+    laptop_spend = get_laptop_spend(data)
+    purchases = get_recent_purchases(data, 30)
+    lines.append(f"\n*4. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
+    if laptop_spend["models"]:
+        lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
+        lines.append(f"• Laptop spend this month: {fmt_usd(laptop_spend['total_spend'])}")
+        for m in laptop_spend["models"]:
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_usd(m['spend'])}")
+    else:
+        lines.append("• No laptop procurement data for this month")
+    if purchases:
+        lines.append(f"• New laptops procured this month: {len(purchases)}")
+
+    # 5. App Spend
     total_spend, renewals = get_current_month_spend(data)
-    lines.append(f"\n*4. Spend Summary — {TODAY.strftime('%B %Y')}*")
+    lines.append(f"\n*5. App Spend — {TODAY.strftime('%B %Y')}*")
     lines.append(f"• Total app spend this month: {fmt_usd(total_spend)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
 
-    # 5. Procurement Recommendation
+    # 6. Procurement Recommendation
     stock_laptops = stock["Laptops (ready)"]
     joiners_30 = get_upcoming_joiners(data, 30)
     joiners_90 = get_upcoming_joiners(data, 90)
     aging_critical = [a for a in aging if a["priority"] == "Critical"]
     need = len(joiners_30) + len(aging_critical) - stock_laptops
-    lines.append("\n*5. Procurement Recommendation*")
+    lines.append("\n*6. Procurement Recommendation*")
     if need > 0:
         lines.append(f"• ⚠️ Order {need} laptops: {len(joiners_30)} joiners expected + {len(aging_critical)} critical replacements, only {stock_laptops} in stock")
     else:
         lines.append(f"• ✅ Stock sufficient: {stock_laptops} available for {len(joiners_30)} joiners + {len(aging_critical)} replacements")
     lines.append(f"• 90-day joiner forecast: {len(joiners_90)}")
 
-    # 6. Renewals
-    lines.append(f"\n*6. Upcoming Renewals*")
+    # 7. Renewals
+    lines.append(f"\n*7. Upcoming Renewals*")
     for r in renewals[:5]:
         lines.append(f"• {r['app']} — {r['date'].strftime('%d %b')}")
 
-    # 7. Joiners
-    lines.append(f"\n*7. Joiners & Onboarding* ({len(joiners_30)} this month)")
+    # 8. Joiners
+    lines.append(f"\n*8. Joiners & Onboarding* ({len(joiners_30)} this month)")
     for j in joiners_30[:5]:
         lines.append(f"• {j['name']} — {j['department']} ({j['doj'].strftime('%d %b')})")
 
