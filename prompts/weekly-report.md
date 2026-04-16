@@ -6,8 +6,31 @@ You are an IT operations analyst generating the **weekly IT report** for Saras S
 
 Read the following Excel files from the `data/` directory:
 
-1. **`asset_inventory.xlsx`** — master list of all hardware assets (laptops, monitors, etc.) with purchase dates, assignments, and statuses.
-2. **`spend_tracker.xlsx`** — procurement spend (laptop purchases) and IT app subscription costs/renewals.
+### 1. `asset_inventory.xlsx` — Hardware asset master data
+
+Key sheets and their columns:
+
+- **"Laptop Assigned"** — currently assigned laptops
+  Columns: Employee ID, Employee Name, Email, Department, Laptop Belongs to, Laptop age, Laptop Asset Tag, Laptop Make, Laptop Model, Laptop Serial Number, Warranty Start Date, Warranty End Date, RAM, Processor, Hard Disk, Operating System
+- **"Laptop in stock"** — available unassigned laptops
+  Columns: Laptop Asset Tag, Laptop Make, Laptop Model, Laptop Serial Number, Warranty Start Date, Warranty End Date, RAM, Processor, Hard Disk, Operating System, Condition
+- **"Backup Laptops 3years old"** — old laptops kept as backup
+  Columns: same as "Laptop in stock"
+- **"Assset History"** — assignment history log
+  Columns: Emp ID, Username, Laptop Tag, Laptop Make, Laptop Model, Serial Number, Assigned Date, New Joiner/Replacement
+- **"Laptop Returned"** — returned laptop log
+  Columns: Emp ID, Username, Laptop Tag, Laptop Make, Laptop Model, Serial Number, Returned Date, Resigned/Replacement
+- **"New Laptops purchased "** — procurement log
+  Columns: Asset id, Brand, Model, Serial no, Configuration, Warranty Start Date, Warrenty End Date
+- **"Laptops sold "** — disposed laptops
+- **"Mouse"**, **"Headset"**, **"Keyboard"**, **"Charger"**, **"Harddisk"**, **"Docking station"**, **"Monitor"** — peripheral asset sheets
+- **"Other Assets Instock"** — misc stock counts
+
+### 2. `spend_tracker.xlsx` — App & subscription spend tracker
+
+- **"Sheet1"** — main subscription/app spend data
+  Columns: APPLICATION / SW / LICENSE, Department, POC, Renewal data, Recurring/Onetime, FREQUENCY, Payment Method, then monthly cost columns (Jan 2026 through Dec 2026)
+- **"Linkdin Growth Team"** — LinkedIn-specific subscription costs
 
 ## Report Sections
 
@@ -17,11 +40,11 @@ Produce **two outputs**:
 
 A concise, scannable Slack post (max ~30 lines) with these sections:
 
-1. **Stock Levels** — count of available (unassigned) assets by type (laptops, monitors, etc.)
-2. **New Assignments This Week** — assets assigned in the last 7 days (employee name + asset type)
-3. **Replacements Completed** — assets that were replaced in the last 7 days
-4. **Aging Alert** — count of hardware assets older than 3.5 years (>1,277 days from purchase date to today). List the top 5 oldest with assigned employee name.
-5. **Spend Snapshot** — total laptop procurement spend this month + count of app subscriptions renewing in the next 30 days with their combined annual cost.
+1. **Stock Levels** — count from "Laptop in stock" sheet + peripheral stock from "Other Assets Instock". Also count backup laptops from "Backup Laptops 3years old".
+2. **New Assignments This Week** — from "Assset History" sheet, filter rows where "Assigned Date" is within the last 7 days. Show Username + Laptop Make/Model + whether New Joiner or Replacement.
+3. **Replacements Completed** — from "Assset History" where "New Joiner/Replacement" = "Replacement" in the last 7 days, cross-referenced with "Laptop Returned".
+4. **Aging Alert** — from "Laptop Assigned" sheet, calculate age using "Warranty Start Date" as purchase proxy (>3.5 years = flagged). Also check the "Laptop age" column if populated. List top 5 oldest with Employee Name.
+5. **Spend Snapshot** — from spend_tracker "Sheet1", sum the current month's column for total app spend. Count subscriptions where "Renewal data" falls within the next 30 days.
 
 Use bullet points and bold headers. Keep it brief.
 

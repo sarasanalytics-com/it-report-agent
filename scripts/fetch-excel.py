@@ -29,10 +29,10 @@ DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID", "")
 
 # SharePoint paths – override via env vars to match your folder layout
 ASSET_FILE_PATH = os.environ.get(
-    "ASSET_FILE_PATH", "IT/Asset Inventory/IT_Asset_Inventory.xlsx"
+    "ASSET_FILE_PATH", "Assets Date.xlsx"
 )
 SPEND_FILE_PATH = os.environ.get(
-    "SPEND_FILE_PATH", "IT/Procurement/IT_Spend_Tracker.xlsx"
+    "SPEND_FILE_PATH", "Saras Apps & Subscriptions Purchase from Jan 26 .xlsx"
 )
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"

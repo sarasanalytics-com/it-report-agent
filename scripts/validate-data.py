@@ -23,32 +23,59 @@ DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
 EXPECTED = {
     "asset_inventory.xlsx": {
         # sheet_name -> list of required columns (case-insensitive match)
-        "Assets": [
-            "Asset ID",
-            "Asset Type",
-            "Make",
+        "Laptop Assigned": [
+            "Employee ID",
+            "Employee Name",
+            "Laptop Asset Tag",
+            "Laptop Make",
+            "Laptop Model",
+            "Laptop Serial Number",
+            "Warranty Start Date",
+        ],
+        "Laptop in stock": [
+            "Laptop Asset Tag",
+            "Laptop Make",
+            "Laptop Model",
+            "Laptop Serial Number",
+            "Condition",
+        ],
+        "Backup Laptops 3years old": [
+            "Laptop Asset Tag",
+            "Laptop Make",
+            "Laptop Model",
+            "Condition",
+        ],
+        "Assset History": [
+            "Emp ID",
+            "Username",
+            "Laptop Tag",
+            "Assigned Date",
+            "New Joiner/Replacement",
+        ],
+        "Laptop Returned": [
+            "Emp ID",
+            "Username",
+            "Laptop Tag",
+            "Returned Date",
+            "Resigned/Replacement",
+        ],
+        "New Laptops purchased ": [
+            "Asset id",
+            "Brand",
             "Model",
-            "Serial Number",
-            "Purchase Date",
-            "Assigned To",
-            "Status",
+            "Serial no",
+            "Warranty Start Date",
         ],
     },
     "spend_tracker.xlsx": {
-        "Laptop Procurement": [
-            "Vendor",
-            "Item",
-            "Quantity",
-            "Unit Price",
-            "Total",
-            "Purchase Date",
-        ],
-        "App Subscriptions": [
-            "App Name",
-            "Vendor",
-            "Annual Cost",
-            "Renewal Date",
-            "Status",
+        "Sheet1": [
+            "APPLICATION / SW / LICENSE",
+            "Department",
+            "POC",
+            "Renewal data",
+            "Recurring/Onetime",
+            "FREQUENCY",
+            "Payment Method",
         ],
     },
 }
