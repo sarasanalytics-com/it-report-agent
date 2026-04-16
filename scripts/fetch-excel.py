@@ -34,6 +34,12 @@ ASSET_FILE_PATH = os.environ.get(
 SPEND_FILE_PATH = os.environ.get(
     "SPEND_FILE_PATH", "Saras Apps & Subscriptions Purchase from Jan 26 .xlsx"
 )
+PROCUREMENT_FILE_PATH = os.environ.get(
+    "PROCUREMENT_FILE_PATH", "Anudeep Excel sheets/IT Budget 2026.xlsx"
+)
+JOINERS_FILE_PATH = os.environ.get(
+    "JOINERS_FILE_PATH", "Anudeep Excel sheets/New Joineings and checklist.xlsx"
+)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
@@ -99,6 +105,8 @@ def main() -> None:
     files_to_fetch = [
         (ASSET_FILE_PATH, DATA_DIR / "asset_inventory.xlsx"),
         (SPEND_FILE_PATH, DATA_DIR / "spend_tracker.xlsx"),
+        (PROCUREMENT_FILE_PATH, DATA_DIR / "procurement_plan.xlsx"),
+        (JOINERS_FILE_PATH, DATA_DIR / "joiners_info.xlsx"),
     ]
 
     print(f"Downloading {len(files_to_fetch)} file(s) from SharePoint …")

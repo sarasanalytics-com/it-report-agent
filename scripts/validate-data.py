@@ -78,6 +78,32 @@ EXPECTED = {
             "Payment Method",
         ],
     },
+    "procurement_plan.xlsx": {
+        "Configuration": [
+            "Department & Owner",
+            "Role / Position",
+            "Device Type",
+            "RAM",
+            "Processor",
+        ],
+        "Laptop procurement plan": [
+            "Laptop Procurement Plan & Cost Estimation",
+        ],
+    },
+    "joiners_info.xlsx": {
+        "Joinings": [
+            "Employee name",
+            "Recruiter Name",
+            "DOJ As per Offer letter",
+            "Confirm DOJ",
+            "Designation",
+            "Department",
+        ],
+        "Joining checklist": [
+            "Employee ID ",
+            "Name ",
+        ],
+    },
 }
 
 # ---------------------------------------------------------------------------

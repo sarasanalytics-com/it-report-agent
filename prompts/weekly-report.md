@@ -32,6 +32,24 @@ Key sheets and their columns:
   Columns: APPLICATION / SW / LICENSE, Department, POC, Renewal data, Recurring/Onetime, FREQUENCY, Payment Method, then monthly cost columns (Jan 2026 through Dec 2026)
 - **"Linkdin Growth Team"** — LinkedIn-specific subscription costs
 
+### 3. `procurement_plan.xlsx` — IT Budget & Laptop Procurement Plan (2026)
+
+- **"Configuration"** — standard laptop configs by department
+  Columns: Department & Owner, Role / Position, Device Type, RAM, Storage, Processor, Screen Size, OS, Remark
+- **"Laptop procurement plan"** — planned procurement by department
+  Header row (row 2): Department, Model, Quantity, Avg Price/Laptop (INR), Total Price (INR), Details
+  Note: Row 1 is a title row; actual column headers are in row 2.
+- **"Actual Spends"** — monthly actual spend vs plan
+  Row 3 headers: Model, Joiners, then pairs of (Month Joiners, Month Spend) for Jan–Dec
+  Data rows: Lenovo L14, Mac Book Pro, Lenovo P14S, etc.
+
+### 4. `joiners_info.xlsx` — New Joiner Information
+
+- **"Joinings"** (~36 rows) — upcoming and recent joiners
+  Columns: Employee name, Recruiter Name, Offer letter issued, DOJ As per Offer letter, Confirm DOJ, Designation, Department
+- **"Joining checklist"** (~37 rows) — onboarding IT checklist
+  Columns: Employee ID, Name, Email ID Creation, Reporting Manager Update, Enable MFA, Add in DL's, Invite on Clickup, Invite on slack, send Monthly townhall, If female employee add in Saraswin DL, Asset policy Acknowledgement
+
 ## Report Sections
 
 Produce **two outputs**:
@@ -45,6 +63,7 @@ A concise, scannable Slack post (max ~30 lines) with these sections:
 3. **Replacements Completed** — from "Assset History" where "New Joiner/Replacement" = "Replacement" in the last 7 days, cross-referenced with "Laptop Returned".
 4. **Aging Alert** — from "Laptop Assigned" sheet, calculate age using "Warranty Start Date" as purchase proxy (>3.5 years = flagged). Also check the "Laptop age" column if populated. List top 5 oldest with Employee Name.
 5. **Spend Snapshot** — from spend_tracker "Sheet1", sum the current month's column for total app spend. Count subscriptions where "Renewal data" falls within the next 30 days.
+6. **Upcoming Joiners** — from joiners_info "Joinings", list joiners with "Confirm DOJ" in the next 14 days (name, department, designation). Flag if laptop stock is insufficient.
 
 Use bullet points and bold headers. Keep it brief.
 
@@ -57,6 +76,9 @@ A detailed report (Markdown) suitable for a ClickUp doc, containing:
 - Full spend breakdown by vendor and item category
 - App subscription renewal calendar for the next 60 days
 - Summary statistics: total assets, assigned vs. available, average asset age
+- Upcoming joiners table (next 30 days) from joiners_info with department breakdown
+- Procurement plan vs. actual comparison from procurement_plan "Actual Spends" sheet
+- Onboarding checklist completion status from joiners_info "Joining checklist" (count of incomplete items per recent joiner)
 
 ## Rules
 

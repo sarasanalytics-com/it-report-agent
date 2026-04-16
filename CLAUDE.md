@@ -4,7 +4,7 @@ This repo generates automated weekly and monthly IT asset & spend reports for Sa
 
 ## How It Works
 
-1. GitHub Actions fetches Excel files from SharePoint (asset inventory + spend tracker)
+1. GitHub Actions fetches Excel files from SharePoint (asset inventory, spend tracker, procurement plan, joiner info)
 2. Claude Code reads the Excel data and generates reports using prompts in `prompts/`
 3. A summary is posted to Slack `#it-reports`
 4. The full report is saved as a ClickUp Doc in the IT team workspace
@@ -18,8 +18,8 @@ This repo generates automated weekly and monthly IT asset & spend reports for Sa
 
 ## Report Types
 
-- **Weekly** (every Monday 9 AM IST): stock levels, assignments, replacements, aging alerts, spend snapshot
-- **Monthly** (1st of month 9 AM IST): everything weekly + procurement recommendations, full aging analysis, spend trends, renewal calendar
+- **Weekly** (every Monday 9 AM IST): stock levels, assignments, replacements, aging alerts, spend snapshot, upcoming joiners
+- **Monthly** (1st of month 9 AM IST): everything weekly + procurement recommendations, full aging analysis, spend trends, renewal calendar, joiner onboarding status, budget vs. actual comparison
 
 ## Rules for Claude
 
