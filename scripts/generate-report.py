@@ -11,16 +11,20 @@ Reads Excel files from data/ and writes:
     output/full-report.md
 """
 
+from __future__ import annotations
+
 import sys
 import pathlib
-from datetime import datetime, timedelta
+import datetime as dt
+from datetime import timedelta
 from collections import defaultdict
+from typing import Optional
 
 import openpyxl
 
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "output"
-TODAY = datetime.now().date()
+TODAY = dt.datetime.now().date()
 AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
 
 
@@ -28,15 +32,15 @@ AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
 # Helpers
 # ---------------------------------------------------------------------------
 
-def parse_date(val) -> datetime.date | None:
+def parse_date(val) -> Optional[dt.date]:
     if val is None:
         return None
-    if isinstance(val, datetime):
+    if isinstance(val, dt.datetime):
         return val.date()
     if isinstance(val, str):
         for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"):
             try:
-                return datetime.strptime(val.strip(), fmt).date()
+                return dt.datetime.strptime(val.strip(), fmt).date()
             except ValueError:
                 continue
     return None
