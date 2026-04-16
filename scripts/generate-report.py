@@ -247,8 +247,18 @@ def get_recent_purchases(data: dict, days: int = 30) -> list[dict]:
     return purchases
 
 
+# Row names in spend tracker that are laptop/hardware costs, not app subscriptions
+HARDWARE_SPEND_KEYWORDS = ["laptop", "procurement", "antivirus", "mdm"]
+
+
+def _is_hardware_row(row: dict) -> bool:
+    app_name = str(row.get("APPLICATION / SW / LICENSE", "")).lower()
+    return any(kw in app_name for kw in HARDWARE_SPEND_KEYWORDS)
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
-    """Get total app spend for current month and upcoming renewals."""
+    """Get total app spend for current month and upcoming renewals.
+    Excludes hardware/laptop rows (tracked separately in laptop procurement)."""
     # Find the column matching current month
     month_key = None
     for row in data["spend"]:
@@ -263,6 +273,8 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
     total = 0.0
     if month_key:
         for row in data["spend"]:
+            if _is_hardware_row(row):
+                continue
             val = row.get(month_key)
             if val and isinstance(val, (int, float)):
                 total += float(val)
@@ -271,6 +283,8 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
     renewals = []
     cutoff = TODAY + timedelta(days=30)
     for row in data["spend"]:
+        if _is_hardware_row(row):
+            continue
         rd = parse_date(row.get("Renewal data"))
         if rd and TODAY <= rd <= cutoff:
             renewals.append({
