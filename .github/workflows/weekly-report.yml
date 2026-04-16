@@ -39,6 +39,8 @@ jobs:
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
           ASSET_FILE_PATH: ${{ secrets.ASSET_FILE_PATH }}
           SPEND_FILE_PATH: ${{ secrets.SPEND_FILE_PATH }}
+          PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
+          JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
 
       # ── 2. Validate downloaded data ──
       - name: Validate Excel files

@@ -14,6 +14,7 @@ Optional environment variables:
 import os
 import sys
 import pathlib
+import urllib.parse
 
 import msal
 import requests
@@ -77,7 +78,10 @@ def resolve_drive_id(token: str) -> str:
 
 def download_file(token: str, drive_id: str, file_path: str, dest: pathlib.Path) -> None:
     """Download a single file from SharePoint to a local path."""
-    encoded = file_path.replace("/", ":/") if "/" in file_path else file_path
+    # URL-encode each path segment while preserving folder separators
+    parts = file_path.split("/")
+    encoded_parts = [urllib.parse.quote(p) for p in parts]
+    encoded = ":/".join(encoded_parts) if len(encoded_parts) > 1 else encoded_parts[0]
     url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{encoded}:/content"
     resp = requests.get(
         url,
