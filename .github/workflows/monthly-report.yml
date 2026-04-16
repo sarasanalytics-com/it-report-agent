@@ -1,0 +1,81 @@
+name: IT Monthly Report
+
+on:
+  schedule:
+    - cron: "30 3 1 * *" # 1st of every month, 9:00 AM IST (UTC+5:30)
+  workflow_dispatch:
+    inputs:
+      custom_prompt:
+        description: "Optional: override the default prompt (for ad-hoc queries)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 1. Fetch Excel files from SharePoint ──
+      - name: Fetch Excel data from SharePoint
+        run: python scripts/fetch-excel.py
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          ASSET_FILE_PATH: ${{ secrets.ASSET_FILE_PATH }}
+          SPEND_FILE_PATH: ${{ secrets.SPEND_FILE_PATH }}
+
+      # ── 2. Validate downloaded data ──
+      - name: Validate Excel files
+        run: python scripts/validate-data.py
+
+      # ── 3. Generate report with Claude ──
+      - name: Generate monthly report
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            ${{ inputs.custom_prompt || 'Read the prompt in prompts/monthly-report.md, then read the Excel files in data/ using the xlsx skill and generate the monthly IT report. Save the Slack summary to output/slack-summary.md and the full report to output/full-report.md.' }}
+
+      # ── 4. Post summary to Slack ──
+      - name: Post to Slack #it-reports
+        run: python scripts/post-to-slack.py output/slack-summary.md
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
+
+      # ── 5. Create ClickUp doc ──
+      - name: Create ClickUp doc
+        run: |
+          MONTH_YEAR=$(date -u +"%B %Y")
+          python scripts/create-clickup-doc.py \
+            output/full-report.md \
+            "IT Monthly Report - ${MONTH_YEAR}"
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_WORKSPACE_ID: ${{ secrets.CLICKUP_WORKSPACE_ID }}
+          CLICKUP_SPACE_ID: ${{ secrets.CLICKUP_SPACE_ID }}
+
+      # ── 6. Upload reports as artifacts ──
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-report-${{ github.run_id }}
+          path: output/
+          retention-days: 90
