@@ -125,12 +125,6 @@ def get_stock_summary(data: dict) -> dict:
     return {
         "Laptops (ready)": len(data["in_stock"]),
         "Laptops (3yr+ backup)": len(data["backup"]),
-        "Mouse": len(data["mouse"]),
-        "Headset": len(data["headset"]),
-        "Keyboard": len(data["keyboard"]),
-        "Charger": len(data["charger"]),
-        "Docking Station": len(data["docking"]),
-        "Monitor": len(data["monitor"]),
     }
 
 
