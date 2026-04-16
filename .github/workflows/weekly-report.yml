@@ -57,7 +57,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--allowedTools 'Read' 'Write' 'Edit' 'Bash(mkdir*)' 'Bash(ls*)'"
+          claude_args: "--allowedTools 'Read' 'Write' 'Edit' 'Bash'"
           prompt: |
             ${{ inputs.custom_prompt || 'Read the file prompts/weekly-report.md for instructions. Read the Excel files in data/ directory. Generate the weekly IT report and write two files: output/slack-summary.md (concise Slack summary) and output/full-report.md (detailed ClickUp doc). After writing, run ls -la output/ to confirm both files exist.' }}
 

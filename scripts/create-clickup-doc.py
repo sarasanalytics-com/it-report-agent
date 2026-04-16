@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Create a ClickUp Doc in the IT team workspace with the full report content.
+Create a ClickUp task in the IT team space with the full report as its description.
+
+We use a task (not a Doc) because the ClickUp Docs API v3 is not publicly
+available for all plans. The task serves as the report container.
 
 Usage:
     python create-clickup-doc.py <markdown_file> <doc_title>
 
 Required environment variables:
     CLICKUP_API_TOKEN    – ClickUp personal or API token
-    CLICKUP_WORKSPACE_ID – Team/workspace ID
-    CLICKUP_SPACE_ID     – Space ID where docs should be created
+    CLICKUP_WORKSPACE_ID – Team/workspace ID (unused, kept for compat)
+    CLICKUP_SPACE_ID     – Space ID; a list within this space is auto-detected
 """
 
 import os
@@ -18,43 +21,47 @@ import pathlib
 import requests
 
 API_TOKEN = os.environ["CLICKUP_API_TOKEN"]
-WORKSPACE_ID = os.environ["CLICKUP_WORKSPACE_ID"]
 SPACE_ID = os.environ.get("CLICKUP_SPACE_ID", "")
-CLICKUP_API_BASE = "https://api.clickup.com/api/v3"
+CLICKUP_API_V2 = "https://api.clickup.com/api/v2"
+
+HEADERS = {
+    "Authorization": API_TOKEN,
+    "Content-Type": "application/json",
+}
 
 
-def create_doc(title: str, content: str) -> dict:
-    """Create a ClickUp Doc via API v3."""
-    url = f"{CLICKUP_API_BASE}/workspaces/{WORKSPACE_ID}/docs"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
+def get_or_create_list(list_name: str = "IT Reports") -> str:
+    """Find or create a list named `list_name` in the space."""
+    # Get folderless lists in the space
+    url = f"{CLICKUP_API_V2}/space/{SPACE_ID}/list"
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    for lst in resp.json().get("lists", []):
+        if lst["name"].lower() == list_name.lower():
+            return lst["id"]
+
+    # Create the list if it doesn't exist
+    resp = requests.post(url, headers=HEADERS, json={"name": list_name}, timeout=30)
+    resp.raise_for_status()
+    list_id = resp.json()["id"]
+    print(f"Created ClickUp list: {list_name} (ID: {list_id})")
+    return list_id
+
+
+def create_report_task(list_id: str, title: str, content: str) -> dict:
+    """Create a task with the report content as its markdown description."""
+    url = f"{CLICKUP_API_V2}/list/{list_id}/task"
     payload = {
         "name": title,
-        "parent": {"id": SPACE_ID, "type": 5} if SPACE_ID else None,
+        "markdown_description": content,
+        "status": "complete",
     }
-    # Remove None values
-    payload = {k: v for k, v in payload.items() if v is not None}
-
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=60)
     resp.raise_for_status()
-    doc = resp.json()
-    doc_id = doc["id"]
-    print(f"Created ClickUp doc: {title} (ID: {doc_id})")
-
-    # Add content as a page
-    page_url = f"{CLICKUP_API_BASE}/workspaces/{WORKSPACE_ID}/docs/{doc_id}/pages"
-    page_payload = {
-        "name": title,
-        "content": content,
-        "content_format": "text/md",
-    }
-    page_resp = requests.post(page_url, headers=headers, json=page_payload, timeout=30)
-    page_resp.raise_for_status()
-    print(f"Added report content to doc page.")
-
-    return doc
+    task = resp.json()
+    print(f"Created ClickUp task: {title} (ID: {task['id']})")
+    print(f"URL: {task.get('url', 'N/A')}")
+    return task
 
 
 def main() -> None:
@@ -71,10 +78,15 @@ def main() -> None:
 
     content = md_path.read_text(encoding="utf-8").strip()
     if not content:
-        print("Report file is empty — skipping ClickUp doc creation.", file=sys.stderr)
+        print("Report file is empty — skipping ClickUp creation.", file=sys.stderr)
         sys.exit(1)
 
-    create_doc(title, content)
+    if not SPACE_ID:
+        print("CLICKUP_SPACE_ID not set — skipping ClickUp creation.", file=sys.stderr)
+        sys.exit(1)
+
+    list_id = get_or_create_list()
+    create_report_task(list_id, title, content)
     print("Done.")
 
 
