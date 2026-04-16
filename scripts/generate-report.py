@@ -50,16 +50,16 @@ def age_years(dt: datetime.date) -> float:
     return (TODAY - dt).days / 365.25
 
 
-def fmt_inr(amount) -> str:
+def fmt_usd(amount) -> str:
     try:
         n = float(amount)
     except (TypeError, ValueError):
         return "N/A"
-    if n >= 10_000_000:
-        return f"₹{n/10_000_000:,.2f} Cr"
-    if n >= 100_000:
-        return f"₹{n/100_000:,.2f} L"
-    return f"₹{n:,.0f}"
+    if n >= 1_000_000:
+        return f"${n/1_000_000:,.2f}M"
+    if n >= 1_000:
+        return f"${n:,.2f}"
+    return f"${n:,.2f}"
 
 
 def read_sheet(wb, sheet_name: str, header_row: int = 1) -> list[dict]:
@@ -277,7 +277,7 @@ def generate_weekly_slack(data: dict) -> str:
     # 5. Spend
     total_spend, renewals = get_current_month_spend(data)
     lines.append(f"\n*5. App Spend — {TODAY.strftime('%B %Y')}*")
-    lines.append(f"• Total this month: {fmt_inr(total_spend)}")
+    lines.append(f"• Total this month: {fmt_usd(total_spend)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
     for r in renewals[:3]:
         lines.append(f"  - {r['app']} ({r['date'].strftime('%d %b')})")
@@ -360,7 +360,7 @@ def generate_weekly_full(data: dict) -> str:
     # Spend
     total_spend, renewals = get_current_month_spend(data)
     lines.append(f"\n## 5. App Spend — {TODAY.strftime('%B %Y')}\n")
-    lines.append(f"**Total this month:** {fmt_inr(total_spend)}\n")
+    lines.append(f"**Total this month:** {fmt_usd(total_spend)}\n")
     if renewals:
         lines.append("### Upcoming Renewals (next 30 days)\n")
         lines.append("| Application | Department | Renewal Date | Frequency |")
@@ -397,7 +397,7 @@ def generate_weekly_full(data: dict) -> str:
     lines.append(f"| Backup Laptops (3yr+) | {len(data['backup'])} |")
     lines.append(f"| Average Laptop Age | {avg_age} years |")
     lines.append(f"| Laptops > 3.5yr | {len(aging)} |")
-    lines.append(f"| App Spend This Month | {fmt_inr(total_spend)} |")
+    lines.append(f"| App Spend This Month | {fmt_usd(total_spend)} |")
     lines.append(f"| Upcoming Joiners (30d) | {len(joiners)} |")
 
     lines.append(f"\n---\n_Generated: {TODAY.strftime('%d %B %Y')}_")
@@ -435,7 +435,7 @@ def generate_monthly_slack(data: dict) -> str:
     # 4. Spend
     total_spend, renewals = get_current_month_spend(data)
     lines.append(f"\n*4. Spend Summary — {TODAY.strftime('%B %Y')}*")
-    lines.append(f"• Total app spend this month: {fmt_inr(total_spend)}")
+    lines.append(f"• Total app spend this month: {fmt_usd(total_spend)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
 
     # 5. Procurement Recommendation
@@ -489,7 +489,7 @@ def generate_monthly_full(data: dict) -> str:
             price = row.get("Avg Price/Laptop (INR) (As per current market price)", "")
             total = row.get("Total Price (INR)", "")
             if dept and model:
-                lines.append(f"| {dept} | {model} | {qty} | {fmt_inr(price)} | {fmt_inr(total)} |")
+                lines.append(f"| {dept} | {model} | {qty} | {fmt_usd(price)} | {fmt_usd(total)} |")
 
     # Onboarding checklist status
     lines.append(f"\n## 9. Onboarding Checklist Status\n")

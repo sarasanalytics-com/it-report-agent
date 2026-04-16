@@ -24,7 +24,7 @@ This repo generates automated weekly and monthly IT asset & spend reports for Sa
 ## Rules for Claude
 
 - Read Excel files using the xlsx skill
-- Currency is INR (₹) with comma separators
+- Currency is USD ($) with comma separators
 - Assets older than 3.5 years (1,277 days) are flagged for replacement
 - Never fabricate data — only report what exists in the spreadsheets
 - Save output to `output/slack-summary.md` and `output/full-report.md`
