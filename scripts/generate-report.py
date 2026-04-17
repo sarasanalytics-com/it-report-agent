@@ -32,6 +32,23 @@ AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
 # Helpers
 # ---------------------------------------------------------------------------
 
+def is_truly_assigned(row: dict) -> bool:
+    """True if the row represents an actively assigned laptop.
+    Excludes rows where Employee ID is blank or marked "In Stock" /
+    "Hand over" / similar non-assignment placeholders."""
+    emp_id = row.get("Employee ID")
+    if emp_id is None:
+        return False
+    emp_id_str = str(emp_id).strip().lower()
+    if not emp_id_str:
+        return False
+    # Common non-assignment markers in the Employee ID column
+    non_assignment = ("in stock", "instock", "hand over", "handover", "stock")
+    if any(marker in emp_id_str for marker in non_assignment):
+        return False
+    return True
+
+
 def parse_date(val) -> Optional[dt.date]:
     if val is None:
         return None
@@ -165,6 +182,8 @@ def get_aging_laptops(data: dict) -> list[dict]:
     """Return assigned laptops older than 3.5 years, sorted oldest first."""
     aging = []
     for row in data["assigned"]:
+        if not is_truly_assigned(row):
+            continue
         dt = parse_date(row.get("Warranty Start Date"))
         if dt and (TODAY - dt).days > AGE_THRESHOLD_DAYS:
             aging.append({
@@ -183,6 +202,8 @@ def get_aging_laptops(data: dict) -> list[dict]:
 def get_age_distribution(data: dict) -> dict:
     buckets = {"0-2yr": 0, "2-3yr": 0, "3-3.5yr": 0, "3.5-4yr": 0, ">4yr": 0}
     for row in data["assigned"]:
+        if not is_truly_assigned(row):
+            continue
         dt = parse_date(row.get("Warranty Start Date"))
         if not dt:
             continue
@@ -662,12 +683,13 @@ def generate_weekly_full(data: dict) -> str:
     else:
         lines.append(f"\n**✅ Stock sufficient** for next 30 days of joiners.")
 
-    # Summary stats
-    total_assigned = len(data["assigned"])
+    # Summary stats (filter out In Stock / blank rows)
+    assigned_rows = [r for r in data["assigned"] if is_truly_assigned(r)]
+    total_assigned = len(assigned_rows)
     total_stock = len(data["in_stock"])
     avg_age = 0
     age_count = 0
-    for row in data["assigned"]:
+    for row in assigned_rows:
         dt = parse_date(row.get("Warranty Start Date"))
         if dt:
             avg_age += age_years(dt)
@@ -693,7 +715,7 @@ def generate_weekly_full(data: dict) -> str:
 def generate_monthly_slack(data: dict) -> str:
     lines = [f"*📊 IT Monthly Report — {TODAY.strftime('%B %Y')}*\n"]
 
-    total_assigned = len(data["assigned"])
+    total_assigned = sum(1 for r in data["assigned"] if is_truly_assigned(r))
     aging = get_aging_laptops(data)
     assignments_month = get_recent_assignments(data, 30)
     replacements = [a for a in assignments_month if str(a.get("New Joiner/Replacement", "")).lower() == "replacement"]
@@ -823,8 +845,11 @@ def main() -> None:
 
     print(f"Loading Excel data from {DATA_DIR} …")
     data = load_data()
-    print(f"  Loaded: {len(data['assigned'])} assigned laptops, {len(data['history'])} history records, "
-          f"{len(data['spend'])} spend rows, {len(data['joinings'])} joiners")
+    truly_assigned = sum(1 for r in data['assigned'] if is_truly_assigned(r))
+    print(f"  Loaded: {truly_assigned} assigned laptops ({len(data['assigned'])} rows, "
+          f"{len(data['assigned']) - truly_assigned} excluded as In Stock/blank), "
+          f"{len(data['history'])} history records, {len(data['spend'])} spend rows, "
+          f"{len(data['joinings'])} joiners")
 
     if report_type == "weekly":
         slack = generate_weekly_slack(data)
