@@ -11,6 +11,7 @@ Optional environment variables:
   SPEND_FILE_PATH           – path to procurement/app spend Excel in SharePoint
 """
 
+import base64
 import os
 import sys
 import pathlib
@@ -76,9 +77,47 @@ def resolve_drive_id(token: str) -> str:
     return resp.json()["id"]
 
 
+def _encode_share_url(url: str) -> str:
+    """Convert a SharePoint/OneDrive sharing URL to a Graph 'shares' token."""
+    b64 = base64.urlsafe_b64encode(url.encode("utf-8")).decode("utf-8").rstrip("=")
+    return "u!" + b64
+
+
+def download_via_share_url(token: str, share_url: str, dest: pathlib.Path) -> None:
+    """Download a file given a SharePoint/OneDrive sharing URL."""
+    share_token = _encode_share_url(share_url)
+    # Resolve to driveItem
+    meta_url = f"{GRAPH_BASE}/shares/{share_token}/driveItem"
+    resp = requests.get(meta_url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    resp.raise_for_status()
+    item = resp.json()
+    drive_id = item["parentReference"]["driveId"]
+    item_id = item["id"]
+    # Download content
+    content_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
+    resp = requests.get(
+        content_url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=120,
+        stream=True,
+    )
+    resp.raise_for_status()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+    size_kb = dest.stat().st_size / 1024
+    print(f"  ✓ Downloaded (via share URL) → {dest.name} ({size_kb:.0f} KB)")
+
+
 def download_file(token: str, drive_id: str, file_path: str, dest: pathlib.Path) -> None:
-    """Download a single file from SharePoint to a local path."""
-    # URL-encode each path segment while preserving folder separators
+    """Download a file from SharePoint. Supports both folder paths and sharing URLs."""
+    # If the path is a sharing URL, resolve via /shares endpoint
+    if file_path.startswith("http://") or file_path.startswith("https://"):
+        download_via_share_url(token, file_path, dest)
+        return
+
+    # Otherwise treat as a path inside the site drive
     parts = file_path.split("/")
     encoded_parts = [urllib.parse.quote(p) for p in parts]
     encoded = "/".join(encoded_parts)
