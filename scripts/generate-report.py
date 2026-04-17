@@ -570,7 +570,7 @@ def get_stock_vs_joiners(data: dict, days: int = 7) -> dict:
 def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %B %Y')}*\n"]
 
-    # 1. Stock (with week-over-week comparison)
+    # 1. Stock (with week-over-week comparison table)
     stock = get_stock_summary(data)
     if prev_snap and prev_snap.get("date"):
         prev_date = prev_snap["date"]
@@ -579,8 +579,12 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
         prev_ready = prev_snap.get("stock_ready", cur_ready)
         cur_backup = stock.get("Laptops (3yr+ backup)", 0)
         prev_backup = prev_snap.get("stock_backup", cur_backup)
-        lines.append(f"• 🟢 Laptops (ready): {cur_ready} (prev {prev_ready}, {_fmt_delta(cur_ready, prev_ready)})")
-        lines.append(f"• 🟢 Laptops (3yr+ backup): {cur_backup} (prev {prev_backup}, {_fmt_delta(cur_backup, prev_backup)})")
+        lines.append("```")
+        lines.append(f"{'Asset':<24} {'This':>6} {'Last':>6} {'Δ':>6}")
+        lines.append(f"{'-'*24} {'-'*6} {'-'*6} {'-'*6}")
+        lines.append(f"{'Laptops (ready)':<24} {cur_ready:>6} {prev_ready:>6} {_fmt_delta(cur_ready, prev_ready):>6}")
+        lines.append(f"{'Laptops (3yr+ backup)':<24} {cur_backup:>6} {prev_backup:>6} {_fmt_delta(cur_backup, prev_backup):>6}")
+        lines.append("```")
     else:
         lines.append("*1. Stock Levels*")
         for item, count in stock.items():
@@ -602,18 +606,22 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     for r in replacements[:3]:
         lines.append(f"• {r.get('Username', 'N/A')} — {r.get('Laptop Make', '')} {r.get('Laptop Model', '')}")
 
-    # 3a. This Week vs Last Week
+    # 3a. This Week vs Last Week (table format)
     cmp = get_weekly_activity_comparison(data)
     lines.append(f"\n*📈 This Week vs Last Week*")
-    def _row(label: str, key: str) -> str:
+    lines.append("```")
+    lines.append(f"{'Metric':<26} {'This':>6} {'Last':>6} {'Δ':>6}")
+    lines.append(f"{'-'*26} {'-'*6} {'-'*6} {'-'*6}")
+    for label, key in [
+        ("New assignments", "assignments"),
+        ("New joiner assignments", "new_joiner_assigns"),
+        ("Replacements", "replacements"),
+        ("Returns", "returns"),
+    ]:
         this_v = cmp[key]["this"]
         prev_v = cmp[key]["prev"]
-        arrow = "↑" if this_v > prev_v else ("↓" if this_v < prev_v else "→")
-        return f"• {label}: *{this_v}* vs {prev_v} last week ({arrow} {_fmt_delta(this_v, prev_v)})"
-    lines.append(_row("New assignments", "assignments"))
-    lines.append(_row("New joiner assignments", "new_joiner_assigns"))
-    lines.append(_row("Replacements", "replacements"))
-    lines.append(_row("Returns", "returns"))
+        lines.append(f"{label:<26} {this_v:>6} {prev_v:>6} {_fmt_delta(this_v, prev_v):>6}")
+    lines.append("```")
 
     # 4. Aging
     aging = get_aging_laptops(data)
