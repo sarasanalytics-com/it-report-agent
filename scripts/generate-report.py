@@ -145,7 +145,7 @@ def get_recent_assignments(data: dict, days: int = 7) -> list[dict]:
     results = []
     for row in data["history"]:
         dt = parse_date(row.get("Assigned Date"))
-        if dt and dt >= cutoff:
+        if dt and cutoff <= dt <= TODAY:
             results.append(row)
     return results
 
@@ -155,7 +155,7 @@ def get_recent_returns(data: dict, days: int = 7) -> list[dict]:
     results = []
     for row in data["returned"]:
         dt = parse_date(row.get("Returned Date"))
-        if dt and dt >= cutoff:
+        if dt and cutoff <= dt <= TODAY:
             results.append(row)
     return results
 
