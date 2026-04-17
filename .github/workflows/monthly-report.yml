@@ -57,7 +57,10 @@ jobs:
       - name: Post to Slack
         run: |
           DOCX_FILE=$(ls output/*.docx 2>/dev/null | head -1)
-          python scripts/post-to-slack.py output/slack-summary.md ${DOCX_FILE:+"$DOCX_FILE"}
+          python scripts/post-to-slack.py \
+            output/slack-summary.md \
+            ${DOCX_FILE:+"$DOCX_FILE"} \
+            --alert output/slack-alert.md
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}

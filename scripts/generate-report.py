@@ -489,39 +489,46 @@ def generate_weekly_slack(data: dict) -> str:
     for r in renewals[:3]:
         lines.append(f"  - {r['app']} ({r['date'].strftime('%d %b')})")
 
-    # 7. Joiners Next Week — Reminder with laptop needs
+    # 7. Upcoming Joiners (next 14 days)
+    joiners = get_upcoming_joiners(data, 14)
+    lines.append(f"\n*7. Upcoming Joiners (next 14 days)* ({len(joiners)})")
+    for j in joiners[:5]:
+        lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ: {j['doj'].strftime('%d %b')})")
+    if not joiners:
+        lines.append("• None in the next 14 days")
+
+    lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
+    return "\n".join(lines)
+
+
+def generate_joiner_alert(data: dict) -> str:
+    """Separate Slack alert: joiners next week + stock vs joiners analysis."""
+    lines = [f"*🚨 Joiner Alert & Stock Check — {TODAY.strftime('%d %B %Y')}*\n"]
+
+    # Joiners next week with laptop config
     joiners_week = get_joiners_with_laptop_needs(data, 7)
-    lines.append(f"\n*7. ⏰ Joiners Next Week* ({len(joiners_week)}) — prepare laptops")
+    lines.append(f"*⏰ Joiners Next Week* ({len(joiners_week)}) — prepare laptops")
     if joiners_week:
         for j in joiners_week:
             cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
             days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
             lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
     else:
-        lines.append("• No joiners in the next 7 days")
+        lines.append("• No joiners in the next 7 days ✅")
 
-    # 8. Upcoming Joiners (next 14 days)
-    joiners = get_upcoming_joiners(data, 14)
-    lines.append(f"\n*8. Upcoming Joiners (next 14 days)* ({len(joiners)})")
-    for j in joiners[:5]:
-        lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ: {j['doj'].strftime('%d %b')})")
-    if not joiners:
-        lines.append("• None in the next 14 days")
-
-    # 9. Stock vs Joiners Analysis
+    # Stock vs Joiners
     svj = get_stock_vs_joiners(data, 7)
     icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
-    lines.append(f"\n*9. {icon} Stock vs Joiners*")
+    lines.append(f"\n*{icon} Stock vs Joiners*")
     lines.append(f"• Laptops in stock: {svj['stock_ready']} (ready) + {svj['stock_backup']} (backup)")
     lines.append(f"• Joiners next 7 days: {svj['joiners_next_week']} | next 30 days: {svj['joiners_next_30_days']}")
     if svj["gap_next_week"] > 0:
-        lines.append(f"• 🔴 Short {svj['gap_next_week']} laptop(s) for next week's joiners!")
+        lines.append(f"• 🔴 *Short {svj['gap_next_week']} laptop(s)* for next week's joiners — arrange immediately!")
     elif svj["gap_next_30_days"] > 0:
         lines.append(f"• 🟡 Will be short {svj['gap_next_30_days']} laptop(s) within 30 days — plan procurement")
     else:
         lines.append(f"• ✅ Stock covers next 30 days of joiners")
 
-    lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
 
 
@@ -752,30 +759,6 @@ def generate_monthly_slack(data: dict) -> str:
     for j in joiners_30[:5]:
         lines.append(f"• {j['name']} — {j['department']} ({j['doj'].strftime('%d %b')})")
 
-    # 9. Joiners Next Week — Laptop Prep Reminder
-    joiners_week = get_joiners_with_laptop_needs(data, 7)
-    lines.append(f"\n*9. ⏰ Joiners Next Week* ({len(joiners_week)}) — prepare laptops")
-    if joiners_week:
-        for j in joiners_week:
-            cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
-            days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
-            lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
-    else:
-        lines.append("• No joiners in the next 7 days")
-
-    # 10. Stock vs Joiners
-    svj = get_stock_vs_joiners(data, 7)
-    icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
-    lines.append(f"\n*10. {icon} Stock vs Joiners*")
-    lines.append(f"• Laptops in stock: {svj['stock_ready']} (ready) + {svj['stock_backup']} (backup)")
-    lines.append(f"• Joiners next 7 days: {svj['joiners_next_week']} | next 30 days: {svj['joiners_next_30_days']}")
-    if svj["gap_next_week"] > 0:
-        lines.append(f"• 🔴 Short {svj['gap_next_week']} laptop(s) for next week's joiners!")
-    elif svj["gap_next_30_days"] > 0:
-        lines.append(f"• 🟡 Will be short {svj['gap_next_30_days']} laptop(s) within 30 days")
-    else:
-        lines.append(f"• ✅ Stock covers next 30 days of joiners")
-
     lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
 
@@ -850,11 +833,15 @@ def main() -> None:
         slack = generate_monthly_slack(data)
         full = generate_monthly_full(data)
 
+    alert = generate_joiner_alert(data)
+
     (OUTPUT_DIR / "slack-summary.md").write_text(slack, encoding="utf-8")
+    (OUTPUT_DIR / "slack-alert.md").write_text(alert, encoding="utf-8")
     (OUTPUT_DIR / "full-report.md").write_text(full, encoding="utf-8")
 
     print(f"Reports saved to {OUTPUT_DIR}/")
     print(f"  slack-summary.md: {len(slack)} chars")
+    print(f"  slack-alert.md: {len(alert)} chars")
     print(f"  full-report.md: {len(full)} chars")
 
 

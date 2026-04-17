@@ -92,36 +92,58 @@ def slack_upload_file(file_path: pathlib.Path, title: str, thread_ts: str) -> No
     print(f"Uploaded {file_path.name} to {CHANNEL}")
 
 
+def _read_and_trim(path: pathlib.Path) -> str:
+    text = path.read_text(encoding="utf-8").strip()
+    if len(text) > 3900:
+        text = text[:3900] + "\n\n_… message truncated._"
+    return text
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: post-to-slack.py <summary_md> [docx_file]", file=sys.stderr)
+        print("Usage: post-to-slack.py <summary_md> [docx_file] [--alert <alert_md>]",
+              file=sys.stderr)
         sys.exit(1)
 
-    md_path = pathlib.Path(sys.argv[1])
-    docx_path = pathlib.Path(sys.argv[2]) if len(sys.argv) >= 3 else None
+    args = sys.argv[1:]
+    alert_path = None
+    if "--alert" in args:
+        i = args.index("--alert")
+        if i + 1 >= len(args):
+            print("--alert flag requires a file path", file=sys.stderr)
+            sys.exit(1)
+        alert_path = pathlib.Path(args[i + 1])
+        args = args[:i] + args[i + 2:]
+
+    md_path = pathlib.Path(args[0])
+    docx_path = pathlib.Path(args[1]) if len(args) >= 2 else None
 
     if not md_path.exists():
         print(f"File not found: {md_path}", file=sys.stderr)
         sys.exit(1)
 
-    content = md_path.read_text(encoding="utf-8").strip()
+    content = _read_and_trim(md_path)
     if not content:
         print("Report file is empty — skipping Slack post.", file=sys.stderr)
         sys.exit(1)
 
-    # Slack has a 4000-char limit per message; truncate if needed
-    if len(content) > 3900:
-        content = content[:3900] + "\n\n_… summary truncated. Full report attached below._"
-
     # Post the summary message
     ts = slack_post(content)
 
-    # Upload the Word doc in a thread if provided
+    # Upload the Word doc in a thread under the summary
     if docx_path and docx_path.exists():
         title = docx_path.stem.replace("-", " ").replace("_", " ")
         slack_upload_file(docx_path, title, ts)
     elif docx_path:
         print(f"Warning: docx file not found: {docx_path}", file=sys.stderr)
+
+    # Post the alert as a separate standalone message
+    if alert_path and alert_path.exists():
+        alert_text = _read_and_trim(alert_path)
+        if alert_text:
+            slack_post(alert_text)
+    elif alert_path:
+        print(f"Warning: alert file not found: {alert_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
