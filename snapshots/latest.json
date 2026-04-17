@@ -1,0 +1,12 @@
+{
+  "date": "2026-04-17",
+  "stock_ready": 8,
+  "stock_backup": 14,
+  "total_assigned": 216,
+  "total_laptops": 238,
+  "aging_count": 28,
+  "laptop_spend_month": 565810.0,
+  "laptop_joiners_month": 4,
+  "app_spend_month": 4609.74,
+  "joiners_next_30": 5
+}
