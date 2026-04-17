@@ -617,12 +617,14 @@ def generate_weekly_full(data: dict) -> str:
     purchases = get_purchases_this_month(data)
     lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
     if laptop_spend["total_joiners"] or laptop_spend["total_spend"]:
-        lines.append(f"- **Joiners this month:** {laptop_spend['total_joiners']}")
-        lines.append(f"- **Laptop spend this month:** {fmt_inr(laptop_spend['total_spend'])}")
-        lines.append(f"- **Laptops procured this month:** {laptop_spend['total_joiners']}")
-        for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']}")
+        lines.append("### Summary\n")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        lines.append(f"| Joiners this month | {laptop_spend['total_joiners']} |")
+        lines.append(f"| Laptop spend this month | {fmt_inr(laptop_spend['total_spend'])} |")
+        lines.append(f"| Laptops procured this month | {laptop_spend['total_joiners']} |")
         lines.append("")
+        lines.append("### Breakdown by Model\n")
         lines.append("| Model | Joiners |")
         lines.append("|-------|---------|")
         for m in laptop_spend["models"]:
