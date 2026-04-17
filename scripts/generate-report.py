@@ -259,12 +259,28 @@ def get_laptop_spend(data: dict) -> dict:
 
 
 def get_recent_purchases(data: dict, days: int = 30) -> list[dict]:
-    """Get laptops purchased within the given number of days."""
+    """Get laptops purchased within the given number of past days (up to today)."""
     cutoff = TODAY - timedelta(days=days)
     purchases = []
     for row in data["purchased"]:
         d = parse_date(row.get("Warranty Start Date"))
-        if d and d >= cutoff:
+        if d and cutoff <= d <= TODAY:
+            purchases.append({
+                "brand": row.get("Brand", ""),
+                "model": row.get("Model", ""),
+                "serial": row.get("Serial no", ""),
+                "date": d,
+            })
+    purchases.sort(key=lambda x: x["date"], reverse=True)
+    return purchases
+
+
+def get_purchases_this_month(data: dict) -> list[dict]:
+    """Get laptops purchased within the current calendar month."""
+    purchases = []
+    for row in data["purchased"]:
+        d = parse_date(row.get("Warranty Start Date"))
+        if d and d.year == TODAY.year and d.month == TODAY.month and d <= TODAY:
             purchases.append({
                 "brand": row.get("Brand", ""),
                 "model": row.get("Model", ""),
@@ -484,7 +500,7 @@ def generate_weekly_full(data: dict) -> str:
 
     # Laptop Procurement
     laptop_spend = get_laptop_spend(data)
-    purchases = get_recent_purchases(data, 30)
+    purchases = get_purchases_this_month(data)
     lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
     if laptop_spend["models"]:
         lines.append(f"**Joiners this month:** {laptop_spend['total_joiners']}  ")
@@ -580,7 +596,7 @@ def generate_monthly_slack(data: dict) -> str:
 
     # 4. Laptop Procurement
     laptop_spend = get_laptop_spend(data)
-    purchases = get_recent_purchases(data, 30)
+    purchases = get_purchases_this_month(data)
     lines.append(f"\n*4. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
     if laptop_spend["models"]:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
