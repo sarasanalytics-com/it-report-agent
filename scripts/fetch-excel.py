@@ -114,12 +114,21 @@ def main() -> None:
     ]
 
     print(f"Downloading {len(files_to_fetch)} file(s) from SharePoint …")
+    failures = []
     for sp_path, local_path in files_to_fetch:
         try:
             download_file(token, drive_id, sp_path, local_path)
         except requests.HTTPError as exc:
-            print(f"  ✗ Failed to download {sp_path}: {exc}", file=sys.stderr)
-            sys.exit(1)
+            # Redact tokens but show path (last segment only) so we know which file failed
+            filename = sp_path.rsplit("/", 1)[-1]
+            print(f"  ✗ Failed to download '{filename}' (path: {sp_path}): {exc}", file=sys.stderr)
+            failures.append(sp_path)
+
+    if failures:
+        print(f"\n{len(failures)} file(s) failed to download:", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        sys.exit(1)
 
     print("All files downloaded successfully.")
 
