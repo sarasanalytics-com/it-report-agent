@@ -214,31 +214,46 @@ def get_laptop_spend(data: dict) -> dict:
     abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
 
     result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
+    total_row = None
     for row in data["actual_spend"]:
-        # First column may be named "col_0" if header cell is blank; treat it as Model
         model = row.get("Model") or row.get("col_0", "")
-        if not model or str(model).strip().lower() in ("", "none", "total"):
+        model_str = str(model).strip().lower() if model else ""
+        # Capture the Total row separately for authoritative monthly spend
+        if model_str in ("total", "grand total"):
+            total_row = row
+            continue
+        if not model_str or model_str in ("none",):
             continue
 
-        # Find joiners and spend columns for current month
+        # Per-model: pull joiners for current month (individual spend values
+        # in this sheet are unreliable; use Total row below for actual INR)
         joiners = 0
-        spend = 0.0
         for key, val in row.items():
             key_lower = str(key).strip().lower()
             for abbr in abbrevs:
                 if abbr in key_lower and "joiner" in key_lower:
-                    joiners = int(val) if val and str(val).strip() not in ("", "None") else 0
-                elif abbr in key_lower and "spend" in key_lower:
-                    spend = float(val) if val and str(val).strip() not in ("", "None") else 0.0
+                    try:
+                        joiners = int(val) if val not in (None, "") else 0
+                    except (TypeError, ValueError):
+                        joiners = 0
 
-        if joiners or spend:
+        if joiners:
             result["models"].append({
                 "model": str(model).strip(),
                 "joiners": joiners,
-                "spend": spend,
             })
             result["total_joiners"] += joiners
-            result["total_spend"] += spend
+
+    # Authoritative spend from the Total row
+    if total_row:
+        for key, val in total_row.items():
+            key_lower = str(key).strip().lower()
+            for abbr in abbrevs:
+                if abbr in key_lower and "spend" in key_lower:
+                    try:
+                        result["total_spend"] = float(val) if val not in (None, "") else 0.0
+                    except (TypeError, ValueError):
+                        result["total_spend"] = 0.0
 
     return result
 
@@ -262,11 +277,18 @@ def get_recent_purchases(data: dict, days: int = 30) -> list[dict]:
 
 # Row names in spend tracker that are laptop/hardware costs, not app subscriptions
 HARDWARE_SPEND_KEYWORDS = ["laptop", "procurement", "antivirus", "mdm"]
+# Row names that are aggregate/total rows (would double-count if summed)
+TOTAL_ROW_KEYWORDS = ["total", "grand total", "sum"]
 
 
 def _is_hardware_row(row: dict) -> bool:
     app_name = str(row.get("APPLICATION / SW / LICENSE", "")).lower()
     return any(kw in app_name for kw in HARDWARE_SPEND_KEYWORDS)
+
+
+def _is_total_row(row: dict) -> bool:
+    app_name = str(row.get("APPLICATION / SW / LICENSE", "")).strip().lower()
+    return app_name in TOTAL_ROW_KEYWORDS
 
 
 def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
@@ -286,7 +308,7 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
     total = 0.0
     if month_key:
         for row in data["spend"]:
-            if _is_hardware_row(row):
+            if _is_hardware_row(row) or _is_total_row(row):
                 continue
             val = row.get(month_key)
             if val and isinstance(val, (int, float)):
@@ -296,7 +318,7 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
     renewals = []
     cutoff = TODAY + timedelta(days=30)
     for row in data["spend"]:
-        if _is_hardware_row(row):
+        if _is_hardware_row(row) or _is_total_row(row):
             continue
         rd = parse_date(row.get("Renewal data"))
         if rd and TODAY <= rd <= cutoff:
@@ -369,7 +391,7 @@ def generate_weekly_slack(data: dict) -> str:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
         lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
         for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_inr(m['spend'])}")
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners")
     else:
         lines.append("• No laptop procurement data for this month")
     if purchases:
@@ -467,10 +489,10 @@ def generate_weekly_full(data: dict) -> str:
     if laptop_spend["models"]:
         lines.append(f"**Joiners this month:** {laptop_spend['total_joiners']}  ")
         lines.append(f"**Laptop spend this month:** {fmt_inr(laptop_spend['total_spend'])}\n")
-        lines.append("| Model | Joiners | Spend |")
-        lines.append("|-------|---------|-------|")
+        lines.append("| Model | Joiners |")
+        lines.append("|-------|---------|")
         for m in laptop_spend["models"]:
-            lines.append(f"| {m['model']} | {m['joiners']} | {fmt_inr(m['spend'])} |")
+            lines.append(f"| {m['model']} | {m['joiners']} |")
     else:
         lines.append("No laptop procurement data for this month.\n")
     if purchases:
@@ -564,7 +586,7 @@ def generate_monthly_slack(data: dict) -> str:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
         lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
         for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']} joiners, {fmt_inr(m['spend'])}")
+            lines.append(f"  - {m['model']}: {m['joiners']} joiners")
     else:
         lines.append("• No laptop procurement data for this month")
     if purchases:
