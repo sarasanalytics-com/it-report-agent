@@ -696,9 +696,11 @@ def generate_weekly_full(data: dict) -> str:
             age_count += 1
     avg_age = round(avg_age / age_count, 1) if age_count else 0
 
+    total_laptops = total_assigned + total_stock + len(data['backup'])
     lines.append("\n## 8. Summary\n")
     lines.append(f"| Metric | Value |")
     lines.append(f"|--------|-------|")
+    lines.append(f"| **Total Laptops** | **{total_laptops}** |")
     lines.append(f"| Total Laptops Assigned | {total_assigned} |")
     lines.append(f"| Laptops Available | {total_stock} |")
     lines.append(f"| Backup Laptops (3yr+) | {len(data['backup'])} |")
@@ -721,7 +723,9 @@ def generate_monthly_slack(data: dict) -> str:
     replacements = [a for a in assignments_month if str(a.get("New Joiner/Replacement", "")).lower() == "replacement"]
 
     # 1. Highlights
+    total_laptops = total_assigned + len(data["in_stock"]) + len(data["backup"])
     lines.append("*1. Monthly Highlights*")
+    lines.append(f"• Total laptops: {total_laptops} (Assigned {total_assigned} + Stock {len(data['in_stock'])} + Backup {len(data['backup'])})")
     lines.append(f"• Total laptops assigned: {total_assigned}")
     lines.append(f"• New assignments this month: {len(assignments_month)}")
     lines.append(f"• Replacements done: {len(replacements)}")
