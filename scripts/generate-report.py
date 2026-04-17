@@ -121,6 +121,7 @@ def load_data() -> dict:
         "checklist": read_sheet(join_wb, "Joining checklist"),
         "proc_plan": read_sheet(proc_wb, "Laptop procurement plan", header_row=2),
         "actual_spend": read_sheet(proc_wb, "Actual Spends", header_row=3),
+        "configuration": read_sheet(proc_wb, "Configuration"),
     }
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
@@ -364,6 +365,75 @@ def get_upcoming_joiners(data: dict, days: int = 14) -> list[dict]:
     return joiners
 
 
+def lookup_laptop_config(data: dict, department: str, designation: str) -> str:
+    """Find the standard laptop config for a joiner based on department/designation.
+
+    Returns a short string like "Lenovo L14 / 16GB / i5" or "" if no match.
+    """
+    if not department and not designation:
+        return ""
+    dept_l = str(department).strip().lower()
+    desig_l = str(designation).strip().lower()
+    best_match = None
+    for row in data.get("configuration", []):
+        cfg_dept = str(row.get("Department & Owner", "")).strip().lower()
+        cfg_role = str(row.get("Role / Position", "")).strip().lower()
+        # Match if department contains cfg_dept or vice versa, or role matches
+        dept_hit = cfg_dept and (cfg_dept in dept_l or dept_l in cfg_dept)
+        role_hit = cfg_role and (cfg_role in desig_l or desig_l in cfg_role)
+        if dept_hit and role_hit:
+            best_match = row
+            break  # exact match on both
+        if dept_hit and not best_match:
+            best_match = row
+    if not best_match:
+        return ""
+    device = str(best_match.get("Device Type", "")).strip()
+    ram = str(best_match.get("RAM", "")).strip()
+    proc = str(best_match.get("Processor", "")).strip()
+    parts = [p for p in (device, ram, proc) if p and p.lower() != "none"]
+    return " / ".join(parts)
+
+
+def get_joiners_with_laptop_needs(data: dict, days: int = 7) -> list[dict]:
+    """Upcoming joiners in the next N days with their required laptop config."""
+    joiners = get_upcoming_joiners(data, days)
+    for j in joiners:
+        j["laptop_config"] = lookup_laptop_config(data, j["department"], j["designation"])
+        j["days_until"] = (j["doj"] - TODAY).days
+    return joiners
+
+
+def get_stock_vs_joiners(data: dict, days: int = 7) -> dict:
+    """Compare current laptop stock to upcoming joiner demand.
+
+    Returns a dict with keys:
+      stock_ready, stock_backup, joiners_next_week, joiners_next_30_days,
+      gap_next_week, gap_next_30_days, status ("ok"/"watch"/"short")
+    """
+    stock_ready = len(data["in_stock"])
+    stock_backup = len(data["backup"])
+    joiners_7 = get_upcoming_joiners(data, days)
+    joiners_30 = get_upcoming_joiners(data, 30)
+    gap_7 = len(joiners_7) - stock_ready
+    gap_30 = len(joiners_30) - stock_ready
+    if gap_7 > 0:
+        status = "short"
+    elif gap_30 > 0:
+        status = "watch"
+    else:
+        status = "ok"
+    return {
+        "stock_ready": stock_ready,
+        "stock_backup": stock_backup,
+        "joiners_next_week": len(joiners_7),
+        "joiners_next_30_days": len(joiners_30),
+        "gap_next_week": gap_7,
+        "gap_next_30_days": gap_30,
+        "status": status,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Report generators
 # ---------------------------------------------------------------------------
@@ -419,17 +489,37 @@ def generate_weekly_slack(data: dict) -> str:
     for r in renewals[:3]:
         lines.append(f"  - {r['app']} ({r['date'].strftime('%d %b')})")
 
-    # 7. Upcoming Joiners
+    # 7. Joiners Next Week — Reminder with laptop needs
+    joiners_week = get_joiners_with_laptop_needs(data, 7)
+    lines.append(f"\n*7. ⏰ Joiners Next Week* ({len(joiners_week)}) — prepare laptops")
+    if joiners_week:
+        for j in joiners_week:
+            cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
+            days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
+            lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
+    else:
+        lines.append("• No joiners in the next 7 days")
+
+    # 8. Upcoming Joiners (next 14 days)
     joiners = get_upcoming_joiners(data, 14)
-    lines.append(f"\n*7. Upcoming Joiners (next 14 days)* ({len(joiners)})")
+    lines.append(f"\n*8. Upcoming Joiners (next 14 days)* ({len(joiners)})")
     for j in joiners[:5]:
         lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ: {j['doj'].strftime('%d %b')})")
     if not joiners:
         lines.append("• None in the next 14 days")
 
-    stock_laptops = stock["Laptops (ready)"]
-    if joiners and stock_laptops < len(joiners):
-        lines.append(f"\n⚠️ *Stock alert*: {stock_laptops} laptops available but {len(joiners)} joiners expected!")
+    # 9. Stock vs Joiners Analysis
+    svj = get_stock_vs_joiners(data, 7)
+    icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
+    lines.append(f"\n*9. {icon} Stock vs Joiners*")
+    lines.append(f"• Laptops in stock: {svj['stock_ready']} (ready) + {svj['stock_backup']} (backup)")
+    lines.append(f"• Joiners next 7 days: {svj['joiners_next_week']} | next 30 days: {svj['joiners_next_30_days']}")
+    if svj["gap_next_week"] > 0:
+        lines.append(f"• 🔴 Short {svj['gap_next_week']} laptop(s) for next week's joiners!")
+    elif svj["gap_next_30_days"] > 0:
+        lines.append(f"• 🟡 Will be short {svj['gap_next_30_days']} laptop(s) within 30 days — plan procurement")
+    else:
+        lines.append(f"• ✅ Stock covers next 30 days of joiners")
 
     lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
@@ -534,6 +624,37 @@ def generate_weekly_full(data: dict) -> str:
         for j in joiners:
             lines.append(f"| {j['name']} | {j['department']} | {j['designation']} | {j['doj'].strftime('%d %b %Y')} |")
 
+    # Joiners Next Week — Laptop needs
+    joiners_week = get_joiners_with_laptop_needs(data, 7)
+    lines.append(f"\n### ⏰ Joiners Next Week ({len(joiners_week)}) — Laptop Prep Reminder\n")
+    if joiners_week:
+        lines.append("| Name | Department | Designation | DOJ | Days | Laptop Config |")
+        lines.append("|------|------------|-------------|-----|------|---------------|")
+        for j in joiners_week:
+            days = f"{j['days_until']}d" if j['days_until'] > 0 else "today"
+            lines.append(f"| {j['name']} | {j['department']} | {j['designation']} | {j['doj'].strftime('%d %b %Y')} | {days} | {j['laptop_config'] or '—'} |")
+    else:
+        lines.append("No joiners in the next 7 days.")
+
+    # Stock vs Joiners Analysis
+    svj = get_stock_vs_joiners(data, 7)
+    icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
+    lines.append(f"\n### {icon} Stock vs Joiners Analysis\n")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Laptops ready in stock | {svj['stock_ready']} |")
+    lines.append(f"| Backup laptops (3yr+) | {svj['stock_backup']} |")
+    lines.append(f"| Joiners next 7 days | {svj['joiners_next_week']} |")
+    lines.append(f"| Joiners next 30 days | {svj['joiners_next_30_days']} |")
+    lines.append(f"| Gap next 7 days | {svj['gap_next_week']} |")
+    lines.append(f"| Gap next 30 days | {svj['gap_next_30_days']} |")
+    if svj["gap_next_week"] > 0:
+        lines.append(f"\n**🔴 Action needed:** short {svj['gap_next_week']} laptop(s) for next week's joiners — arrange immediately.")
+    elif svj["gap_next_30_days"] > 0:
+        lines.append(f"\n**🟡 Plan procurement:** will be short {svj['gap_next_30_days']} laptop(s) within 30 days.")
+    else:
+        lines.append(f"\n**✅ Stock sufficient** for next 30 days of joiners.")
+
     # Summary stats
     total_assigned = len(data["assigned"])
     total_stock = len(data["in_stock"])
@@ -630,6 +751,30 @@ def generate_monthly_slack(data: dict) -> str:
     lines.append(f"\n*8. Joiners & Onboarding* ({len(joiners_30)} this month)")
     for j in joiners_30[:5]:
         lines.append(f"• {j['name']} — {j['department']} ({j['doj'].strftime('%d %b')})")
+
+    # 9. Joiners Next Week — Laptop Prep Reminder
+    joiners_week = get_joiners_with_laptop_needs(data, 7)
+    lines.append(f"\n*9. ⏰ Joiners Next Week* ({len(joiners_week)}) — prepare laptops")
+    if joiners_week:
+        for j in joiners_week:
+            cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
+            days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
+            lines.append(f"• {j['name']} — {j['department']}, {j['designation']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
+    else:
+        lines.append("• No joiners in the next 7 days")
+
+    # 10. Stock vs Joiners
+    svj = get_stock_vs_joiners(data, 7)
+    icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
+    lines.append(f"\n*10. {icon} Stock vs Joiners*")
+    lines.append(f"• Laptops in stock: {svj['stock_ready']} (ready) + {svj['stock_backup']} (backup)")
+    lines.append(f"• Joiners next 7 days: {svj['joiners_next_week']} | next 30 days: {svj['joiners_next_30_days']}")
+    if svj["gap_next_week"] > 0:
+        lines.append(f"• 🔴 Short {svj['gap_next_week']} laptop(s) for next week's joiners!")
+    elif svj["gap_next_30_days"] > 0:
+        lines.append(f"• 🟡 Will be short {svj['gap_next_30_days']} laptop(s) within 30 days")
+    else:
+        lines.append(f"• ✅ Stock covers next 30 days of joiners")
 
     lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
