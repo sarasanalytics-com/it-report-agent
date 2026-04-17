@@ -13,6 +13,7 @@ Reads Excel files from data/ and writes:
 
 from __future__ import annotations
 
+import json
 import sys
 import pathlib
 import datetime as dt
@@ -24,6 +25,7 @@ import openpyxl
 
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "output"
+SNAPSHOT_DIR = pathlib.Path(__file__).resolve().parent.parent / "snapshots"
 TODAY = dt.datetime.now().date()
 AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
 
@@ -168,6 +170,29 @@ def get_recent_assignments(data: dict, days: int = 7) -> list[dict]:
     return results
 
 
+def get_assignments_in_window(data: dict, start_days_ago: int, end_days_ago: int) -> list[dict]:
+    """Assignments with date in [TODAY - start_days_ago, TODAY - end_days_ago]."""
+    start = TODAY - timedelta(days=start_days_ago)
+    end = TODAY - timedelta(days=end_days_ago)
+    results = []
+    for row in data["history"]:
+        d = parse_date(row.get("Assigned Date"))
+        if d and start <= d <= end:
+            results.append(row)
+    return results
+
+
+def get_returns_in_window(data: dict, start_days_ago: int, end_days_ago: int) -> list[dict]:
+    start = TODAY - timedelta(days=start_days_ago)
+    end = TODAY - timedelta(days=end_days_ago)
+    results = []
+    for row in data["returned"]:
+        d = parse_date(row.get("Returned Date"))
+        if d and start <= d <= end:
+            results.append(row)
+    return results
+
+
 def get_recent_returns(data: dict, days: int = 7) -> list[dict]:
     cutoff = TODAY - timedelta(days=days)
     results = []
@@ -176,6 +201,89 @@ def get_recent_returns(data: dict, days: int = 7) -> list[dict]:
         if dt and cutoff <= dt <= TODAY:
             results.append(row)
     return results
+
+
+def get_weekly_activity_comparison(data: dict) -> dict:
+    """Compare this-week (last 7d) vs previous-week (7-14d ago) activity."""
+    this_assigns = get_assignments_in_window(data, 7, 0)
+    prev_assigns = get_assignments_in_window(data, 14, 8)
+    this_repl = [a for a in this_assigns if str(a.get("New Joiner/Replacement", "")).lower() == "replacement"]
+    prev_repl = [a for a in prev_assigns if str(a.get("New Joiner/Replacement", "")).lower() == "replacement"]
+    this_returns = get_returns_in_window(data, 7, 0)
+    prev_returns = get_returns_in_window(data, 14, 8)
+    return {
+        "assignments": {"this": len(this_assigns), "prev": len(prev_assigns)},
+        "new_joiner_assigns": {
+            "this": sum(1 for a in this_assigns if str(a.get("New Joiner/Replacement", "")).lower() == "new joiner"),
+            "prev": sum(1 for a in prev_assigns if str(a.get("New Joiner/Replacement", "")).lower() == "new joiner"),
+        },
+        "replacements": {"this": len(this_repl), "prev": len(prev_repl)},
+        "returns": {"this": len(this_returns), "prev": len(prev_returns)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Snapshot helpers (for stock/week-over-week comparison)
+# ---------------------------------------------------------------------------
+
+def current_snapshot(data: dict) -> dict:
+    """Build a snapshot of key metrics for persistence."""
+    total_assigned = sum(1 for r in data["assigned"] if is_truly_assigned(r))
+    aging = get_aging_laptops(data)
+    laptop_spend = get_laptop_spend(data)
+    total_app, _ = get_current_month_spend(data)
+    joiners_30 = get_upcoming_joiners(data, 30)
+    return {
+        "date": TODAY.isoformat(),
+        "stock_ready": len(data["in_stock"]),
+        "stock_backup": len(data["backup"]),
+        "total_assigned": total_assigned,
+        "total_laptops": total_assigned + len(data["in_stock"]) + len(data["backup"]),
+        "aging_count": len(aging),
+        "laptop_spend_month": laptop_spend["total_spend"],
+        "laptop_joiners_month": laptop_spend["total_joiners"],
+        "app_spend_month": total_app,
+        "joiners_next_30": len(joiners_30),
+    }
+
+
+def load_previous_snapshot() -> Optional[dict]:
+    """Read the snapshot saved by the previous run, if any."""
+    path = SNAPSHOT_DIR / "latest.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_snapshot(snap: dict) -> None:
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (SNAPSHOT_DIR / "latest.json").write_text(
+        json.dumps(snap, indent=2), encoding="utf-8"
+    )
+
+
+def _delta_icon(cur: float, prev: float, good_is_up: bool = False) -> str:
+    if cur == prev:
+        return "➖"
+    up = cur > prev
+    if good_is_up:
+        return "🟢 ↑" if up else "🔴 ↓"
+    return "🔴 ↑" if up else "🟢 ↓"
+
+
+def _fmt_delta(cur: float, prev: Optional[float], as_int: bool = True) -> str:
+    if prev is None:
+        return "—"
+    diff = cur - prev
+    if diff == 0:
+        return "±0"
+    sign = "+" if diff > 0 else ""
+    if as_int:
+        return f"{sign}{int(diff)}"
+    return f"{sign}{diff:,.0f}"
 
 
 def get_aging_laptops(data: dict) -> list[dict]:
@@ -459,15 +567,25 @@ def get_stock_vs_joiners(data: dict, days: int = 7) -> dict:
 # Report generators
 # ---------------------------------------------------------------------------
 
-def generate_weekly_slack(data: dict) -> str:
+def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %B %Y')}*\n"]
 
-    # 1. Stock
+    # 1. Stock (with week-over-week comparison)
     stock = get_stock_summary(data)
-    lines.append("*1. Stock Levels*")
-    for item, count in stock.items():
-        icon = "🟢" if count > 5 else ("🟡" if count >= 2 else "🔴")
-        lines.append(f"• {icon} {item}: {count}")
+    if prev_snap and prev_snap.get("date"):
+        prev_date = prev_snap["date"]
+        lines.append(f"*1. Stock Levels (vs {prev_date})*")
+        cur_ready = stock.get("Laptops (ready)", 0)
+        prev_ready = prev_snap.get("stock_ready", cur_ready)
+        cur_backup = stock.get("Laptops (3yr+ backup)", 0)
+        prev_backup = prev_snap.get("stock_backup", cur_backup)
+        lines.append(f"• 🟢 Laptops (ready): {cur_ready} (prev {prev_ready}, {_fmt_delta(cur_ready, prev_ready)})")
+        lines.append(f"• 🟢 Laptops (3yr+ backup): {cur_backup} (prev {prev_backup}, {_fmt_delta(cur_backup, prev_backup)})")
+    else:
+        lines.append("*1. Stock Levels*")
+        for item, count in stock.items():
+            icon = "🟢" if count > 5 else ("🟡" if count >= 2 else "🔴")
+            lines.append(f"• {icon} {item}: {count}")
 
     # 2. New Assignments
     assignments = get_recent_assignments(data, 7)
@@ -483,6 +601,19 @@ def generate_weekly_slack(data: dict) -> str:
     lines.append(f"\n*3. Replacements Completed* ({len(replacements)})")
     for r in replacements[:3]:
         lines.append(f"• {r.get('Username', 'N/A')} — {r.get('Laptop Make', '')} {r.get('Laptop Model', '')}")
+
+    # 3a. This Week vs Last Week
+    cmp = get_weekly_activity_comparison(data)
+    lines.append(f"\n*📈 This Week vs Last Week*")
+    def _row(label: str, key: str) -> str:
+        this_v = cmp[key]["this"]
+        prev_v = cmp[key]["prev"]
+        arrow = "↑" if this_v > prev_v else ("↓" if this_v < prev_v else "→")
+        return f"• {label}: *{this_v}* vs {prev_v} last week ({arrow} {_fmt_delta(this_v, prev_v)})"
+    lines.append(_row("New assignments", "assignments"))
+    lines.append(_row("New joiner assignments", "new_joiner_assigns"))
+    lines.append(_row("Replacements", "replacements"))
+    lines.append(_row("Returns", "returns"))
 
     # 4. Aging
     aging = get_aging_laptops(data)
@@ -553,16 +684,42 @@ def generate_joiner_alert(data: dict) -> str:
     return "\n".join(lines)
 
 
-def generate_weekly_full(data: dict) -> str:
+def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines = [f"# IT Weekly Report — {TODAY.strftime('%d %B %Y')}\n"]
 
-    # Stock
+    # Stock (side-by-side with previous snapshot)
     stock = get_stock_summary(data)
     lines.append("## 1. Stock Levels\n")
-    lines.append("| Asset Type | Available |")
-    lines.append("|------------|-----------|")
-    for item, count in stock.items():
-        lines.append(f"| {item} | {count} |")
+    if prev_snap and prev_snap.get("date"):
+        prev_date = prev_snap["date"]
+        cur_ready = stock.get("Laptops (ready)", 0)
+        cur_backup = stock.get("Laptops (3yr+ backup)", 0)
+        prev_ready = prev_snap.get("stock_ready", cur_ready)
+        prev_backup = prev_snap.get("stock_backup", cur_backup)
+        lines.append(f"| Asset Type | This Week | Last Week ({prev_date}) | Δ |")
+        lines.append("|------------|-----------|------------------------|---|")
+        lines.append(f"| Laptops (ready) | {cur_ready} | {prev_ready} | {_fmt_delta(cur_ready, prev_ready)} |")
+        lines.append(f"| Laptops (3yr+ backup) | {cur_backup} | {prev_backup} | {_fmt_delta(cur_backup, prev_backup)} |")
+    else:
+        lines.append("| Asset Type | Available |")
+        lines.append("|------------|-----------|")
+        for item, count in stock.items():
+            lines.append(f"| {item} | {count} |")
+
+    # Activity: This Week vs Last Week
+    cmp = get_weekly_activity_comparison(data)
+    lines.append("\n## 1a. Activity: This Week vs Last Week\n")
+    lines.append("| Metric | This Week | Last Week | Δ |")
+    lines.append("|--------|-----------|-----------|---|")
+    for label, key in [
+        ("New assignments", "assignments"),
+        ("New joiner assignments", "new_joiner_assigns"),
+        ("Replacements", "replacements"),
+        ("Returns", "returns"),
+    ]:
+        this_v = cmp[key]["this"]
+        prev_v = cmp[key]["prev"]
+        lines.append(f"| {label} | {this_v} | {prev_v} | {_fmt_delta(this_v, prev_v)} |")
 
     # Other assets in stock
     if data["other_stock"]:
@@ -795,13 +952,13 @@ def generate_monthly_slack(data: dict) -> str:
     return "\n".join(lines)
 
 
-def generate_monthly_full(data: dict) -> str:
+def generate_monthly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     """Monthly full report includes everything from weekly + extra sections."""
     # Start with weekly full report content
     lines = [f"# IT Monthly Report — {TODAY.strftime('%B %Y')}\n"]
 
     # Include all weekly sections
-    weekly = generate_weekly_full(data)
+    weekly = generate_weekly_full(data, prev_snap)
     # Skip the weekly header, use the rest
     weekly_lines = weekly.split("\n")[1:]
     lines.extend(weekly_lines)
@@ -861,18 +1018,31 @@ def main() -> None:
           f"{len(data['history'])} history records, {len(data['spend'])} spend rows, "
           f"{len(data['joinings'])} joiners")
 
+    # Load previous snapshot for week-over-week comparison
+    prev_snap = load_previous_snapshot()
+    if prev_snap:
+        print(f"  Previous snapshot: {prev_snap.get('date', 'unknown')} "
+              f"(stock_ready={prev_snap.get('stock_ready')}, "
+              f"stock_backup={prev_snap.get('stock_backup')})")
+    else:
+        print("  No previous snapshot found — this is the first run.")
+
     if report_type == "weekly":
-        slack = generate_weekly_slack(data)
-        full = generate_weekly_full(data)
+        slack = generate_weekly_slack(data, prev_snap)
+        full = generate_weekly_full(data, prev_snap)
     else:
         slack = generate_monthly_slack(data)
-        full = generate_monthly_full(data)
+        full = generate_monthly_full(data, prev_snap)
 
     alert = generate_joiner_alert(data)
 
     (OUTPUT_DIR / "slack-summary.md").write_text(slack, encoding="utf-8")
     (OUTPUT_DIR / "slack-alert.md").write_text(alert, encoding="utf-8")
     (OUTPUT_DIR / "full-report.md").write_text(full, encoding="utf-8")
+
+    # Save new snapshot for next run
+    save_snapshot(current_snapshot(data))
+    print(f"  Saved new snapshot to {SNAPSHOT_DIR / 'latest.json'}")
 
     print(f"Reports saved to {OUTPUT_DIR}/")
     print(f"  slack-summary.md: {len(slack)} chars")

@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate-report:
@@ -65,7 +65,21 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
 
-      # ── 6. Upload reports as artifacts ──
+      # ── 6. Commit updated snapshot back to repo ──
+      - name: Commit snapshot
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain snapshots/)" ]; then
+            git add snapshots/
+            git commit -m "chore: update monthly snapshot ($(date -u +%Y-%m-%d))"
+            git push
+          else
+            echo "No snapshot changes to commit."
+          fi
+
+      # ── 7. Upload reports as artifacts ──
       - name: Upload report artifacts
         if: always()
         uses: actions/upload-artifact@v4
