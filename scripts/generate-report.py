@@ -631,13 +631,15 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
 
     # 5. Laptop Procurement
     laptop_spend = get_laptop_spend(data)
+    procured = laptop_spend["total_joiners"] if laptop_spend["total_spend"] > 0 else 0
     lines.append(f"\n*5. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
     if laptop_spend["total_joiners"] or laptop_spend["total_spend"]:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
         lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
-        lines.append(f"• Laptops procured this month: {laptop_spend['total_joiners']}")
-        for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']}")
+        lines.append(f"• Laptops procured this month: {procured}")
+        if procured > 0:
+            for m in laptop_spend["models"]:
+                lines.append(f"  - {m['model']}: {m['joiners']}")
     else:
         lines.append("• No laptop procurement data for this month")
 
@@ -780,6 +782,7 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     # Laptop Procurement
     laptop_spend = get_laptop_spend(data)
     purchases = get_purchases_this_month(data)
+    procured_full = laptop_spend["total_joiners"] if laptop_spend["total_spend"] > 0 else 0
     lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
     if laptop_spend["total_joiners"] or laptop_spend["total_spend"]:
         lines.append("### Summary\n")
@@ -787,13 +790,14 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
         lines.append("|--------|-------|")
         lines.append(f"| Joiners this month | {laptop_spend['total_joiners']} |")
         lines.append(f"| Laptop spend this month | {fmt_inr(laptop_spend['total_spend'])} |")
-        lines.append(f"| Laptops procured this month | {laptop_spend['total_joiners']} |")
-        lines.append("")
-        lines.append("### Breakdown by Model\n")
-        lines.append("| Model | Joiners |")
-        lines.append("|-------|---------|")
-        for m in laptop_spend["models"]:
-            lines.append(f"| {m['model']} | {m['joiners']} |")
+        lines.append(f"| Laptops procured this month | {procured_full} |")
+        if procured_full > 0:
+            lines.append("")
+            lines.append("### Breakdown by Model\n")
+            lines.append("| Model | Joiners |")
+            lines.append("|-------|---------|")
+            for m in laptop_spend["models"]:
+                lines.append(f"| {m['model']} | {m['joiners']} |")
     else:
         lines.append("No laptop procurement data for this month.\n")
     if purchases:
@@ -917,13 +921,15 @@ def generate_monthly_slack(data: dict) -> str:
 
     # 4. Laptop Procurement
     laptop_spend = get_laptop_spend(data)
+    procured_m = laptop_spend["total_joiners"] if laptop_spend["total_spend"] > 0 else 0
     lines.append(f"\n*4. Laptop Procurement — {TODAY.strftime('%B %Y')}*")
     if laptop_spend["total_joiners"] or laptop_spend["total_spend"]:
         lines.append(f"• Joiners this month: {laptop_spend['total_joiners']}")
         lines.append(f"• Laptop spend this month: {fmt_inr(laptop_spend['total_spend'])}")
-        lines.append(f"• Laptops procured this month: {laptop_spend['total_joiners']}")
-        for m in laptop_spend["models"]:
-            lines.append(f"  - {m['model']}: {m['joiners']}")
+        lines.append(f"• Laptops procured this month: {procured_m}")
+        if procured_m > 0:
+            for m in laptop_spend["models"]:
+                lines.append(f"  - {m['model']}: {m['joiners']}")
     else:
         lines.append("• No laptop procurement data for this month")
 
