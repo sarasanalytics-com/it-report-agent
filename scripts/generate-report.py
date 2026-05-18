@@ -231,7 +231,7 @@ def current_snapshot(data: dict) -> dict:
     total_assigned = sum(1 for r in data["assigned"] if is_truly_assigned(r))
     aging = get_aging_laptops(data)
     laptop_spend = get_laptop_spend(data)
-    total_app, _ = get_current_month_spend(data)
+    total_app, _, _, _ = get_current_month_spend(data)
     joiners_30 = get_upcoming_joiners(data, 30)
     return {
         "date": TODAY.isoformat(),
@@ -437,9 +437,14 @@ def _is_total_row(row: dict) -> bool:
     return app_name in TOTAL_ROW_KEYWORDS
 
 
-def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
-    """Get total app spend for current month and upcoming renewals.
-    Excludes hardware/laptop rows (tracked separately in laptop procurement)."""
+def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float]:
+    """Get app spend for current month, upcoming renewals, hardware spend, and grand total.
+
+    Returns: (app_only_total, renewals, hardware_total, grand_total)
+        - app_only_total: sum of app/subscription rows (excludes hardware + Total rows)
+        - hardware_total: sum of "Laptops Procurement", "Antivirus,MDM" type rows
+        - grand_total: app + hardware (matches the Total row in the sheet)
+    """
     # Find the column matching current month
     month_key = None
     for row in data["spend"]:
@@ -451,16 +456,21 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
         if month_key:
             break
 
-    total = 0.0
+    app_total = 0.0
+    hw_total = 0.0
     if month_key:
         for row in data["spend"]:
-            if _is_hardware_row(row) or _is_total_row(row):
+            if _is_total_row(row):
                 continue
             val = row.get(month_key)
-            if val and isinstance(val, (int, float)):
-                total += float(val)
+            if not (val and isinstance(val, (int, float))):
+                continue
+            if _is_hardware_row(row):
+                hw_total += float(val)
+            else:
+                app_total += float(val)
 
-    # Upcoming renewals
+    # Upcoming renewals (app only)
     renewals = []
     cutoff = TODAY + timedelta(days=30)
     for row in data["spend"]:
@@ -475,7 +485,7 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict]]:
                 "frequency": row.get("FREQUENCY", ""),
             })
     renewals.sort(key=lambda x: x["date"])
-    return total, renewals
+    return app_total, renewals, hw_total, app_total + hw_total
 
 
 def get_upcoming_joiners(data: dict, days: int = 14) -> list[dict]:
@@ -644,9 +654,12 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
         lines.append("• No laptop procurement data for this month")
 
     # 6. App Spend
-    total_spend, renewals = get_current_month_spend(data)
+    total_spend, renewals, hw_spend, grand_total = get_current_month_spend(data)
     lines.append(f"\n*6. App Spend — {TODAY.strftime('%B %Y')}*")
-    lines.append(f"• Total this month: {fmt_usd(total_spend)}")
+    lines.append(f"• Apps/subscriptions: {fmt_usd(total_spend)}")
+    if hw_spend > 0:
+        lines.append(f"• Hardware (laptops/antivirus): {fmt_usd(hw_spend)}")
+        lines.append(f"• Sheet total: {fmt_usd(grand_total)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
     for r in renewals[:3]:
         lines.append(f"  - {r['app']} ({r['date'].strftime('%d %b')})")
@@ -808,9 +821,14 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
             lines.append(f"| {p['brand']} | {p['model']} | {p['serial']} | {p['date'].strftime('%d %b %Y')} |")
 
     # App Spend
-    total_spend, renewals = get_current_month_spend(data)
+    total_spend, renewals, hw_spend, grand_total = get_current_month_spend(data)
     lines.append(f"\n## 6. App Spend — {TODAY.strftime('%B %Y')}\n")
-    lines.append(f"**Total this month:** {fmt_usd(total_spend)}\n")
+    lines.append("| Category | Amount |")
+    lines.append("|----------|--------|")
+    lines.append(f"| Apps / Subscriptions | {fmt_usd(total_spend)} |")
+    lines.append(f"| Hardware (laptops/antivirus, excluded from app spend) | {fmt_usd(hw_spend)} |")
+    lines.append(f"| **Sheet total** | **{fmt_usd(grand_total)}** |")
+    lines.append("")
     if renewals:
         lines.append("### Upcoming Renewals (next 30 days)\n")
         lines.append("| Application | Department | Renewal Date | Frequency |")
@@ -934,9 +952,12 @@ def generate_monthly_slack(data: dict) -> str:
         lines.append("• No laptop procurement data for this month")
 
     # 5. App Spend
-    total_spend, renewals = get_current_month_spend(data)
+    total_spend, renewals, hw_spend, grand_total = get_current_month_spend(data)
     lines.append(f"\n*5. App Spend — {TODAY.strftime('%B %Y')}*")
-    lines.append(f"• Total app spend this month: {fmt_usd(total_spend)}")
+    lines.append(f"• Apps/subscriptions: {fmt_usd(total_spend)}")
+    if hw_spend > 0:
+        lines.append(f"• Hardware (laptops/antivirus): {fmt_usd(hw_spend)}")
+        lines.append(f"• Sheet total: {fmt_usd(grand_total)}")
     lines.append(f"• Renewals in next 30 days: {len(renewals)}")
 
     # 6. Procurement Recommendation
