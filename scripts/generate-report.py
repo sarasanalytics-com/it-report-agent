@@ -422,7 +422,7 @@ def get_purchases_this_month(data: dict) -> list[dict]:
 
 
 # Row names in spend tracker that are laptop/hardware costs, not app subscriptions
-HARDWARE_SPEND_KEYWORDS = ["laptop", "procurement", "antivirus", "mdm"]
+HARDWARE_SPEND_KEYWORDS = ["laptop"]
 # Row names that are aggregate/total rows (would double-count if summed)
 TOTAL_ROW_KEYWORDS = ["total", "grand total", "sum"]
 
