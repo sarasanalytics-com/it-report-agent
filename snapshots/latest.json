@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-18",
+  "date": "2026-05-25",
   "stock_ready": 4,
   "stock_backup": 15,
   "total_assigned": 219,
@@ -8,5 +8,5 @@
   "laptop_spend_month": 0.0,
   "laptop_joiners_month": 8,
   "app_spend_month": 299.88,
-  "joiners_next_30": 1
+  "joiners_next_30": 0
 }
