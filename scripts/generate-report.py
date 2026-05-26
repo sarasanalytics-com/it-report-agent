@@ -691,6 +691,67 @@ def get_joiners_with_laptop_needs(data: dict, days: int = 7) -> list[dict]:
     return joiners
 
 
+ONBOARDING_CHECKLIST_COLS = [
+    "Email ID Creation",
+    "Reporting Manager Update",
+    "Enable MFA",
+    "Invite on Clickup",
+    "Invite on slack",
+    "Asset policy Acknowledgement",
+]
+
+
+def get_onboarding_readiness(data: dict, days: int = 7) -> Optional[float]:
+    """Average % of checklist items complete for joiners DOJ in next N days.
+
+    Returns None if there are no joiners in the window or no matching
+    checklist rows.
+    """
+    joiners = get_upcoming_joiners(data, days)
+    if not joiners:
+        return None
+    checklist_rows = data.get("checklist", [])
+    if not checklist_rows:
+        return None
+
+    def _norm(s) -> str:
+        return str(s or "").strip().lower()
+
+    by_name = {}
+    for row in checklist_rows:
+        name = row.get("Name ", row.get("Name", ""))
+        if name:
+            by_name[_norm(name)] = row
+
+    pct_values: list[float] = []
+    for j in joiners:
+        row = by_name.get(_norm(j.get("name")))
+        if not row:
+            continue
+        done = 0
+        total = 0
+        for col in ONBOARDING_CHECKLIST_COLS:
+            v = row.get(col)
+            if v is None:
+                continue
+            total += 1
+            if str(v).strip().lower() not in ("", "none", "no", "pending", "0"):
+                done += 1
+        if total:
+            pct_values.append(done / total * 100)
+    if not pct_values:
+        return None
+    return sum(pct_values) / len(pct_values)
+
+
+def get_cost_per_joiner(data: dict) -> Optional[float]:
+    """Laptop spend MTD / joiners-with-spend-this-month."""
+    ls = get_laptop_spend(data)
+    if ls["total_spend"] > 0 and ls["total_joiners"] > 0:
+        return ls["total_spend"] / ls["total_joiners"]
+    return None
+
+
 def get_stock_vs_joiners(data: dict, days: int = 7) -> dict:
     """Compare current laptop stock to upcoming joiner demand.
 
@@ -1231,6 +1292,9 @@ def main() -> None:
     elif "🟡" in (hc["stock"], hc["aging"], hc["joiner_prep"], hc["spend"]):
         overall = "🟡 Attention"
 
+    readiness_pct = get_onboarding_readiness(data, 7)
+    cost_per_joiner = get_cost_per_joiner(data)
+
     metrics = {
         "report_type": report_type,
         "date": TODAY.isoformat(),
@@ -1251,6 +1315,8 @@ def main() -> None:
             "laptop_spend_pct_of_budget": pace["pct_used"],
             "monthly_budget_inr": pace["monthly_planned"],
             "app_spend_month_usd": app_total,
+            "onboarding_readiness_pct": readiness_pct,
+            "cost_per_joiner_inr": cost_per_joiner,
         },
         "aging_distribution": aging_dist,
         "top_aging_critical": [
@@ -1262,6 +1328,12 @@ def main() -> None:
             "stock_backup": len(data["backup"]),
             "joiners_7d": hc["_joiners_7"],
             "joiners_30d": len(joiners_30),
+        },
+        "onboarding_pipeline": {
+            "d7": len(get_upcoming_joiners(data, 7)),
+            "d14": len(get_upcoming_joiners(data, 14)),
+            "d30": len(joiners_30),
+            "d90": len(get_upcoming_joiners(data, 90)),
         },
         "risks": get_risk_callouts(data, hc),
     }
