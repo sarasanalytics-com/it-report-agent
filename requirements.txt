@@ -2,3 +2,4 @@ msal>=1.28.0
 requests>=2.31.0
 openpyxl>=3.1.2
 python-docx>=1.1.0
+matplotlib>=3.8.0

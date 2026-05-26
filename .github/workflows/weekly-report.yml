@@ -45,7 +45,11 @@ jobs:
       - name: Generate weekly report
         run: python scripts/generate-report.py weekly
 
-      # ── 4. Convert full report to Word document ──
+      # ── 4a. Generate dashboard charts ──
+      - name: Generate charts
+        run: python scripts/generate-charts.py
+
+      # ── 4b. Convert full report to Word document ──
       - name: Generate Word document
         run: |
           python scripts/generate-docx.py \

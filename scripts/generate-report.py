@@ -1212,6 +1212,61 @@ def main() -> None:
     (OUTPUT_DIR / "slack-summary.md").write_text(slack, encoding="utf-8")
     (OUTPUT_DIR / "full-report.md").write_text(full, encoding="utf-8")
 
+    # Dump structured metrics so the docx generator and chart generator can
+    # produce visuals without re-parsing markdown.
+    hc = get_health_check(data, prev_snap)
+    laptop_spend = get_laptop_spend(data)
+    app_total, _, _, _ = get_current_month_spend(data)
+    runway = get_procurement_runway(data)
+    pace = get_spend_pace(data)
+    aging_dist = get_age_distribution(data)
+    aging_all = get_aging_laptops(data)
+    joiners_7 = get_upcoming_joiners(data, 7)
+    joiners_30 = get_upcoming_joiners(data, 30)
+    total_assigned = sum(1 for r in data["assigned"] if is_truly_assigned(r))
+
+    overall = "🟢 On Track"
+    if "🔴" in (hc["stock"], hc["aging"], hc["joiner_prep"], hc["spend"]):
+        overall = "🔴 Action Needed"
+    elif "🟡" in (hc["stock"], hc["aging"], hc["joiner_prep"], hc["spend"]):
+        overall = "🟡 Attention"
+
+    metrics = {
+        "report_type": report_type,
+        "date": TODAY.isoformat(),
+        "overall_status": overall,
+        "health": {k: hc[k] for k in ("stock", "aging", "joiner_prep", "spend")},
+        "kpis": {
+            "total_laptops": total_assigned + len(data["in_stock"]) + len(data["backup"]),
+            "total_assigned": total_assigned,
+            "stock_ready": len(data["in_stock"]),
+            "stock_backup": len(data["backup"]),
+            "aging_total": len(aging_all),
+            "aging_critical": hc["_critical_aging"],
+            "joiners_next_7": hc["_joiners_7"],
+            "joiners_next_30": len(joiners_30),
+            "runway_weeks": runway["weeks"],
+            "avg_assignments_per_week": runway["avg_per_week"],
+            "laptop_spend_month": laptop_spend["total_spend"],
+            "laptop_spend_pct_of_budget": pace["pct_used"],
+            "monthly_budget_inr": pace["monthly_planned"],
+            "app_spend_month_usd": app_total,
+        },
+        "aging_distribution": aging_dist,
+        "top_aging_critical": [
+            {"name": a["employee"], "model": f"{a['make']} {a['model']}".strip(), "age_years": a["age_years"]}
+            for a in aging_all[:10]
+        ],
+        "stock_vs_demand": {
+            "stock_ready": len(data["in_stock"]),
+            "stock_backup": len(data["backup"]),
+            "joiners_7d": hc["_joiners_7"],
+            "joiners_30d": len(joiners_30),
+        },
+        "risks": get_risk_callouts(data, hc),
+    }
+    (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str), encoding="utf-8")
+
     # Save new snapshot for next run
     save_snapshot(current_snapshot(data))
     print(f"  Saved new snapshot to {SNAPSHOT_DIR / 'latest.json'}")
