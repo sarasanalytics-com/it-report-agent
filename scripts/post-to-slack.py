@@ -40,7 +40,29 @@ def slack_post(text: str) -> str:
         sys.exit(1)
     ts = body["ts"]
     print(f"Posted summary to {CHANNEL} (ts: {ts})")
+    # Seed feedback reactions so readers can click 👍 or 👎 in one tap
+    _seed_reactions(ts, ["thumbsup", "thumbsdown"])
     return ts
+
+
+def _seed_reactions(ts: str, names: list[str]) -> None:
+    """Best-effort seed of reactions on the posted message for quick feedback."""
+    for name in names:
+        try:
+            resp = requests.post(
+                "https://slack.com/api/reactions.add",
+                headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
+                json={"channel": CHANNEL, "timestamp": ts, "name": name},
+                timeout=15,
+            )
+            body = resp.json() if resp.ok else {}
+            if not body.get("ok"):
+                # Don't fail the whole job — missing reactions:write or
+                # already_reacted is fine.
+                print(f"  (skipped reaction :{name}:: {body.get('error', 'unknown')})",
+                      file=sys.stderr)
+        except requests.RequestException as exc:
+            print(f"  (skipped reaction :{name}:: {exc})", file=sys.stderr)
 
 
 def slack_upload_file(file_path: pathlib.Path, title: str, thread_ts: str) -> None:
