@@ -140,49 +140,171 @@ def render_runway_gauge(weeks, out: pathlib.Path) -> None:
     plt.close(fig)
 
 
+def _status_label(overall: str) -> tuple:
+    """Strip emoji from overall status, return (label, color)."""
+    if "🔴" in overall:
+        return "ACTION NEEDED", RED
+    if "🟡" in overall:
+        return "ATTENTION", AMBER
+    if "🟢" in overall:
+        return "ON TRACK", GREEN
+    return overall, MUTED
+
+
 def render_kpi_strip(kpis: dict, health: dict, overall: str, date: str, out: pathlib.Path) -> None:
-    """Hero banner image: title + status + 4 KPI tiles."""
-    fig, ax = plt.subplots(figsize=(11, 3.3), dpi=160)
+    """Hero banner — HR-focused KPI tiles (workforce, joiner pipeline, readiness, cost)."""
+    fig, ax = plt.subplots(figsize=(11, 3.5), dpi=160)
     fig.patch.set_facecolor("white")
     ax.set_xlim(0, 100)
-    ax.set_ylim(0, 40)
+    ax.set_ylim(0, 42)
     ax.axis("off")
 
     # Header banner
-    banner = FancyBboxPatch((0, 30), 100, 10, boxstyle="round,pad=0.02",
+    banner = FancyBboxPatch((0, 31), 100, 11, boxstyle="round,pad=0.02",
                             linewidth=0, facecolor=NAVY)
     ax.add_patch(banner)
-    ax.text(2, 36.2, "IT Operations Report", color="white",
-            fontsize=18, fontweight="bold", va="center")
-    ax.text(2, 32.4, date, color="#C7D2E2", fontsize=10, va="center")
-    ax.text(98, 35, overall, color="white", fontsize=12,
-            fontweight="bold", ha="right", va="center")
+    ax.text(2, 37.5, "Workforce & IT Readiness", color="white",
+            fontsize=19, fontweight="bold", va="center")
+    ax.text(2, 33.5, f"Week of {date}  ·  Saras Analytics", color="#C7D2E2",
+            fontsize=10, va="center")
 
-    # 4 KPI tiles
+    # Status pill on the right
+    label, color = _status_label(overall)
+    pill_w = max(16, 1.4 * len(label))
+    pill_x = 98 - pill_w
+    ax.add_patch(FancyBboxPatch((pill_x, 34.5), pill_w, 4.5, boxstyle="round,pad=0.1",
+                                linewidth=0, facecolor=color))
+    ax.text(pill_x + pill_w / 2, 36.7, label, color="white",
+            fontsize=10.5, fontweight="bold", ha="center", va="center")
+
+    # 4 HR-focused KPI tiles
+    headcount = kpis.get("total_assigned", 0)
+    joiners_30 = kpis.get("joiners_next_30", 0)
+    joiners_7 = kpis.get("joiners_next_7", 0)
+    readiness = kpis.get("onboarding_readiness_pct")
+    cost_per = kpis.get("cost_per_joiner_inr")
+
+    readiness_color = MUTED
+    if readiness is not None:
+        readiness_color = GREEN if readiness >= 80 else (AMBER if readiness >= 50 else RED)
+    joiner_color = status_color(health.get("joiner_prep", ""))
+
+    fleet_size = kpis.get("total_laptops", 0)
     tiles = [
-        ("Total Laptops", str(kpis["total_laptops"]), MUTED, ""),
-        ("Stock Ready", str(kpis["stock_ready"]), status_color(health["stock"]), ""),
-        ("Critical Aging", str(kpis["aging_critical"]), status_color(health["aging"]), f"{kpis['aging_total']} total >3.5y"),
-        ("Joiners next 30d", str(kpis["joiners_next_30"]), status_color(health["joiner_prep"]),
-         f"runway {kpis['runway_weeks']}w" if kpis.get("runway_weeks") is not None else ""),
+        ("Fleet Size", str(fleet_size), NAVY,
+         f"{headcount} assigned · {kpis.get('stock_ready', 0)} ready"),
+        ("Hiring Pipeline", str(joiners_30), TEAL,
+         f"{joiners_7} in next 7 days"),
+        ("Day-1 Readiness",
+         f"{readiness:.0f}%" if readiness is not None else "—",
+         readiness_color,
+         f"of next-7d joiners ready" if readiness is not None else "no joiners next week"),
+        ("Cost / Joiner",
+         _short_inr(cost_per) if cost_per else "—",
+         AMBER,
+         "MTD laptop spend"),
     ]
     tile_w = 22
     gap = 2
     for i, (label, val, accent, sub) in enumerate(tiles):
         x = 2 + i * (tile_w + gap)
-        # Card body
-        ax.add_patch(FancyBboxPatch((x, 4), tile_w, 22, boxstyle="round,pad=0.02",
+        ax.add_patch(FancyBboxPatch((x, 3), tile_w, 24, boxstyle="round,pad=0.02",
                                     linewidth=0, facecolor=LIGHT_BG))
-        # Accent stripe
-        ax.add_patch(FancyBboxPatch((x, 4), 0.6, 22, boxstyle="round,pad=0",
+        ax.add_patch(FancyBboxPatch((x, 3), 0.7, 24, boxstyle="round,pad=0",
                                     linewidth=0, facecolor=accent))
-        ax.text(x + 1.8, 20, label, fontsize=9, color=MUTED,
+        ax.text(x + 1.8, 21.5, label.upper(), fontsize=8.5, color=MUTED,
                 fontweight="bold", va="center")
-        ax.text(x + 1.8, 13, val, fontsize=22, color=INK,
+        ax.text(x + 1.8, 13.5, val, fontsize=24, color=INK,
                 fontweight="bold", va="center")
         if sub:
-            ax.text(x + 1.8, 7, sub, fontsize=8, color=MUTED, va="center")
+            ax.text(x + 1.8, 6, sub, fontsize=8.5, color=MUTED, va="center")
 
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+def _short_inr(amount) -> str:
+    try:
+        n = float(amount)
+    except (TypeError, ValueError):
+        return "—"
+    if n >= 1e7:
+        return f"₹{n/1e7:.1f} Cr"
+    if n >= 1e5:
+        return f"₹{n/1e5:.1f} L"
+    if n >= 1e3:
+        return f"₹{n/1e3:.0f}k"
+    return f"₹{n:.0f}"
+
+
+def render_onboarding_pipeline(pipeline: dict, out: pathlib.Path) -> None:
+    """Horizontal stacked timeline showing joiners over 7/14/30/90 day windows."""
+    fig, ax = plt.subplots(figsize=(9, 2.8), dpi=160)
+    fig.patch.set_facecolor("white")
+
+    stages = [
+        ("Next 7 days",  pipeline.get("d7", 0),  RED),
+        ("Next 14 days", pipeline.get("d14", 0), AMBER),
+        ("Next 30 days", pipeline.get("d30", 0), TEAL),
+        ("Next 90 days", pipeline.get("d90", 0), NAVY),
+    ]
+    labels = [s[0] for s in stages]
+    values = [s[1] for s in stages]
+    colors = [s[2] for s in stages]
+
+    bars = ax.bar(labels, values, color=colors, width=0.55, edgecolor="white", linewidth=2)
+    for b, v in zip(bars, values):
+        ax.text(b.get_x() + b.get_width() / 2, b.get_height() + max(values) * 0.03 + 0.2,
+                str(v), ha="center", va="bottom",
+                fontsize=14, fontweight="bold", color=INK)
+
+    ax.set_ylim(0, max(values) * 1.25 if max(values) > 0 else 5)
+    ax.set_yticks([])
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_color(MUTED)
+    ax.tick_params(axis="x", labelsize=10, colors=INK)
+    ax.set_title("Hiring Pipeline", fontsize=13, pad=12, loc="left", color=INK)
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+def render_spend_progress(spend_pct, monthly_spend_inr, monthly_budget_inr, out: pathlib.Path) -> None:
+    """Horizontal progress bar of MTD laptop spend vs monthly budget."""
+    fig, ax = plt.subplots(figsize=(9, 2.2), dpi=160)
+    fig.patch.set_facecolor("white")
+
+    pct = float(spend_pct) if spend_pct is not None else 0
+    pct_capped = min(pct, 120)
+
+    # Background track
+    ax.barh([0], [100], color="#EEF1F6", edgecolor="none", height=0.45)
+    # Zones overlay (>100% = red)
+    if pct > 100:
+        ax.barh([0], [pct_capped - 100], left=100, color="#FBE5E7", edgecolor="none", height=0.45)
+
+    color = GREEN if pct < 90 else (AMBER if pct < 110 else RED)
+    ax.barh([0], [pct_capped], color=color, edgecolor="white", height=0.30)
+
+    # Big label
+    ax.text(pct_capped + 1, 0, f"  {pct:.0f}%",
+            va="center", fontsize=13, fontweight="bold", color=INK)
+    # Sub-label
+    spent = _short_inr(monthly_spend_inr) if monthly_spend_inr else "—"
+    budget = _short_inr(monthly_budget_inr) if monthly_budget_inr else "—"
+    ax.text(0, -0.7, f"{spent} of {budget} monthly budget",
+            fontsize=9.5, color=MUTED, va="top")
+
+    ax.set_xlim(0, 125)
+    ax.set_ylim(-1.2, 0.6)
+    ax.set_yticks([])
+    ax.set_xticks([0, 50, 100, 120])
+    ax.set_xticklabels(["0%", "50%", "100%", "120%"], fontsize=9, color=MUTED)
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_color(MUTED)
+    ax.set_title("Laptop Spend Pace (MTD vs Monthly Budget)",
+                 fontsize=13, pad=12, loc="left", color=INK)
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -202,16 +324,29 @@ def main() -> None:
         metrics["kpis"], metrics["health"], metrics["overall_status"],
         metrics["date"], CHARTS_DIR / "kpi-strip.png",
     )
-    print("  ✓ kpi-strip.png")
+    print("  [ok]kpi-strip.png")
 
     render_aging_donut(metrics["aging_distribution"], CHARTS_DIR / "aging.png")
-    print("  ✓ aging.png")
+    print("  [ok]aging.png")
 
     render_stock_vs_demand(metrics["stock_vs_demand"], CHARTS_DIR / "stock.png")
-    print("  ✓ stock.png")
+    print("  [ok]stock.png")
 
     render_runway_gauge(metrics["kpis"].get("runway_weeks"), CHARTS_DIR / "runway.png")
-    print("  ✓ runway.png")
+    print("  [ok]runway.png")
+
+    if metrics.get("onboarding_pipeline"):
+        render_onboarding_pipeline(metrics["onboarding_pipeline"],
+                                   CHARTS_DIR / "pipeline.png")
+        print("  [ok]pipeline.png")
+
+    kpis = metrics.get("kpis", {})
+    if kpis.get("laptop_spend_pct_of_budget") is not None or kpis.get("laptop_spend_month"):
+        render_spend_progress(kpis.get("laptop_spend_pct_of_budget"),
+                              kpis.get("laptop_spend_month"),
+                              kpis.get("monthly_budget_inr"),
+                              CHARTS_DIR / "spend.png")
+        print("  [ok]spend.png")
 
 
 if __name__ == "__main__":
