@@ -1,9 +1,9 @@
 {
-  "date": "2026-06-01",
+  "date": "2026-06-08",
   "stock_ready": 3,
   "stock_backup": 16,
-  "total_assigned": 219,
-  "total_laptops": 238,
+  "total_assigned": 218,
+  "total_laptops": 237,
   "aging_count": 34,
   "laptop_spend_month": 0.0,
   "laptop_joiners_month": 1,
