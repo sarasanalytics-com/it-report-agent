@@ -44,6 +44,10 @@ jobs:
       # ── 3. Generate report (pure Python, no API calls) ──
       - name: Generate weekly report
         run: python scripts/generate-report.py weekly
+        env:
+          # INR→USD conversion rate for laptop procurement & budget figures.
+          # Leave the secret unset to use the built-in default (≈ ₹85.5/$).
+          INR_TO_USD_RATE: ${{ secrets.INR_TO_USD_RATE }}
 
       # ── 4a. Generate dashboard charts ──
       - name: Generate charts

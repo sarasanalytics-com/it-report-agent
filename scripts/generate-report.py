@@ -33,7 +33,26 @@ AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
 # Reporting currency is USD ($). Laptop procurement and budget figures in the
 # source spreadsheets are recorded in INR, so they are converted to USD for the
 # report. Override the rate with the INR_TO_USD_RATE env var when it drifts.
-INR_TO_USD_RATE = float(os.environ.get("INR_TO_USD_RATE", "0.0117"))  # ≈ ₹85.5 / $1
+DEFAULT_INR_TO_USD_RATE = 0.0117  # ≈ ₹85.5 / $1
+
+
+def _load_inr_rate() -> float:
+    """Read INR_TO_USD_RATE from the environment, tolerating an unset or blank
+    value (e.g. a workflow secret that hasn't been configured) by falling back
+    to the default."""
+    raw = os.environ.get("INR_TO_USD_RATE", "").strip()
+    if raw:
+        try:
+            rate = float(raw)
+            if rate > 0:
+                return rate
+        except ValueError:
+            print(f"Warning: invalid INR_TO_USD_RATE={raw!r}; using default "
+                  f"{DEFAULT_INR_TO_USD_RATE}", file=sys.stderr)
+    return DEFAULT_INR_TO_USD_RATE
+
+
+INR_TO_USD_RATE = _load_inr_rate()
 
 
 # ---------------------------------------------------------------------------
