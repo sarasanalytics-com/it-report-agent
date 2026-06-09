@@ -25,6 +25,7 @@ Key sheets and their columns:
 - **"Laptops sold "** — disposed laptops
 - **"Mouse"**, **"Headset"**, **"Keyboard"**, **"Charger"**, **"Harddisk"**, **"Docking station"**, **"Monitor"** — peripheral asset sheets
 - **"Other Assets Instock"** — misc stock counts
+- **"IT Issues"** _(optional, not present yet)_ — IT helpdesk/ticket log. Columns: Date Raised, Issue, Raised By, Priority, Status, Owner. Read automatically when added; until then the report shows a placeholder. The eventual feed (ticketing tool + email + Slack) is a separate integration task.
 
 ### 2. `spend_tracker.xlsx` — App & subscription spend tracker
 
@@ -52,41 +53,48 @@ Key sheets and their columns:
 
 ## Report Sections
 
+> **Note:** Reports are produced deterministically by `scripts/generate-report.py`
+> (no LLM call at runtime). This file documents the intended structure; edit the
+> script to change the actual output. Sections are ordered so an IT head can read
+> the situation at a glance, top-down.
+
 Produce **two outputs**:
 
 ### Output 1: Slack Summary (`output/slack-summary.md`)
 
-A concise, scannable Slack post (max ~30 lines) with these sections:
+A concise, scannable Slack post for the IT head, in this order:
 
-1. **Stock Levels** — count from "Laptop in stock" sheet + peripheral stock from "Other Assets Instock". Also count backup laptops from "Backup Laptops 3years old".
-2. **New Assignments This Week** — from "Assset History" sheet, filter rows where "Assigned Date" is within the last 7 days. Show Username + Laptop Make/Model + whether New Joiner or Replacement.
-3. **Replacements Completed** — from "Assset History" where "New Joiner/Replacement" = "Replacement" in the last 7 days, cross-referenced with "Laptop Returned".
-4. **Aging Alert** — from "Laptop Assigned" sheet, calculate age using "Warranty Start Date" as purchase proxy (>3.5 years = flagged). Also check the "Laptop age" column if populated. List top 5 oldest with Employee Name.
-5. **Spend Snapshot** — from spend_tracker "Sheet1", sum the current month's column for total app spend. Count subscriptions where "Renewal data" falls within the next 30 days.
-6. **Upcoming Joiners** — from joiners_info "Joinings", list joiners with "Confirm DOJ" in the next 14 days (name, department, designation). Flag if laptop stock is insufficient.
+1. **At a Glance** — overall status (🟢/🟡/🔴) + the four health-check lights (Stock · Aging · Joiner Prep · Spend).
+2. **Action Items** — the prioritised to-do list for the IT manager, synthesised from stock gaps, aging, onboarding gaps, renewals and open IT issues. Most urgent first.
+3. **Stock Ready** — laptops ready to assign (+ backup count), with week-over-week delta.
+4. **Joiners Next Week** — joiners with "Confirm DOJ" in the next 7 days (name, department, DOJ, required laptop config).
+5. **Laptop Aging** — count over 3.5 years (and critical count), with the top critical laptops and an auto-generated remark each.
+6. **IT Issues & Status** — open vs resolved counts from the optional "IT Issues" sheet; a placeholder note when no source is connected.
+7. **Spend MTD** — app/subscription spend and laptop spend (USD), plus renewals due in 30 days.
 
 Use bullet points and bold headers. Keep it brief.
 
 ### Output 2: Full Report (`output/full-report.md`)
 
-A detailed report (Markdown) suitable for a ClickUp doc, containing:
+A detailed Markdown report for a ClickUp doc / Word export, same section order with full tables:
 
-- All sections from the Slack summary, but with **full tables** (not just top 5)
-- Complete aging analysis table: all assets > 3 years with Asset ID, type, make/model, purchase date, age in years, assigned to, and replacement priority (Critical if > 4 years, High if > 3.5 years, Medium if > 3 years)
-- Full spend breakdown by vendor and item category
-- App subscription renewal calendar for the next 60 days
-- Summary statistics: total assets, assigned vs. available, average asset age
-- Upcoming joiners table (next 30 days) from joiners_info with department breakdown
-- Procurement plan vs. actual comparison from procurement_plan "Actual Spends" sheet
-- Onboarding checklist completion status from joiners_info "Joining checklist" (count of incomplete items per recent joiner)
+- **At a Glance** — headline KPI table + the single top action.
+- **Health Check** — traffic-light table.
+- **Action Items for IT Manager** — numbered, prioritised table.
+- **Stock Ready** — stock levels vs last week, other assets in stock, activity this week vs last.
+- **Joiners Next Week** — full table + stock-vs-joiners analysis + upcoming joiners (next 30 days).
+- **Laptop Aging** — all assets > 3.5 years with employee, department, asset tag, make/model, purchase date, age, priority (Critical > 4yr, High 3.5–4yr) and an auto-generated **Remarks** column (replacement urgency + warranty status). Plus an age-distribution table.
+- **IT Issues & Status** — table from the optional "IT Issues" sheet, or a placeholder.
+- **Spend (MTD)** — app/subscription categories + renewal calendar + laptop procurement summary and purchases (all USD).
+- **Fleet Summary** — totals, assigned vs available, average age.
 
 ## Rules
 
 - Use today's date for all age/time calculations.
 - If a column is missing or data looks unexpected, note it in the report rather than failing silently.
-- Format currency as INR (₹) with comma separators.
+- Format currency as USD ($) with comma separators. Laptop procurement & budget figures are recorded in INR in the source sheets and converted to USD at the `INR_TO_USD_RATE` rate (noted in the report footer).
 - Sort aging alerts by age descending (oldest first).
-- Do NOT fabricate data — only report what exists in the Excel files.
+- Do NOT fabricate data — only report what exists in the Excel files. IT issues are read from an optional "IT Issues" sheet; when absent, show a placeholder rather than inventing tickets.
 
 ## Output
 

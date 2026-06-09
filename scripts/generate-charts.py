@@ -182,7 +182,7 @@ def render_kpi_strip(kpis: dict, health: dict, overall: str, date: str, out: pat
     joiners_30 = kpis.get("joiners_next_30", 0)
     joiners_7 = kpis.get("joiners_next_7", 0)
     readiness = kpis.get("onboarding_readiness_pct")
-    cost_per = kpis.get("cost_per_joiner_inr")
+    cost_per = kpis.get("cost_per_joiner_usd")
 
     readiness_color = MUTED
     if readiness is not None:
@@ -200,7 +200,7 @@ def render_kpi_strip(kpis: dict, health: dict, overall: str, date: str, out: pat
          readiness_color,
          f"of next-7d joiners ready" if readiness is not None else "no joiners next week"),
         ("Cost / Joiner",
-         _short_inr(cost_per) if cost_per else "—",
+         _short_usd(cost_per) if cost_per else "—",
          AMBER,
          "MTD laptop spend"),
     ]
@@ -224,18 +224,16 @@ def render_kpi_strip(kpis: dict, health: dict, overall: str, date: str, out: pat
     plt.close(fig)
 
 
-def _short_inr(amount) -> str:
+def _short_usd(amount) -> str:
     try:
         n = float(amount)
     except (TypeError, ValueError):
         return "—"
-    if n >= 1e7:
-        return f"₹{n/1e7:.1f} Cr"
-    if n >= 1e5:
-        return f"₹{n/1e5:.1f} L"
+    if n >= 1e6:
+        return f"${n/1e6:.1f}M"
     if n >= 1e3:
-        return f"₹{n/1e3:.0f}k"
-    return f"₹{n:.0f}"
+        return f"${n/1e3:.1f}k"
+    return f"${n:.0f}"
 
 
 def render_onboarding_pipeline(pipeline: dict, out: pathlib.Path) -> None:
@@ -270,7 +268,7 @@ def render_onboarding_pipeline(pipeline: dict, out: pathlib.Path) -> None:
     plt.close(fig)
 
 
-def render_spend_progress(spend_pct, monthly_spend_inr, monthly_budget_inr, out: pathlib.Path) -> None:
+def render_spend_progress(spend_pct, monthly_spend_usd, monthly_budget_usd, out: pathlib.Path) -> None:
     """Horizontal progress bar of MTD laptop spend vs monthly budget."""
     fig, ax = plt.subplots(figsize=(9, 2.2), dpi=160)
     fig.patch.set_facecolor("white")
@@ -291,8 +289,8 @@ def render_spend_progress(spend_pct, monthly_spend_inr, monthly_budget_inr, out:
     ax.text(pct_capped + 1, 0, f"  {pct:.0f}%",
             va="center", fontsize=13, fontweight="bold", color=INK)
     # Sub-label
-    spent = _short_inr(monthly_spend_inr) if monthly_spend_inr else "—"
-    budget = _short_inr(monthly_budget_inr) if monthly_budget_inr else "—"
+    spent = _short_usd(monthly_spend_usd) if monthly_spend_usd else "—"
+    budget = _short_usd(monthly_budget_usd) if monthly_budget_usd else "—"
     ax.text(0, -0.7, f"{spent} of {budget} monthly budget",
             fontsize=9.5, color=MUTED, va="top")
 
@@ -344,7 +342,7 @@ def main() -> None:
     if kpis.get("laptop_spend_pct_of_budget") is not None or kpis.get("laptop_spend_month"):
         render_spend_progress(kpis.get("laptop_spend_pct_of_budget"),
                               kpis.get("laptop_spend_month"),
-                              kpis.get("monthly_budget_inr"),
+                              kpis.get("monthly_budget_usd"),
                               CHARTS_DIR / "spend.png")
         print("  [ok]spend.png")
 

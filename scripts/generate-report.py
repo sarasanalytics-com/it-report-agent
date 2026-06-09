@@ -14,6 +14,7 @@ Reads Excel files from data/ and writes:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import pathlib
 import datetime as dt
@@ -28,6 +29,11 @@ OUTPUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "output"
 SNAPSHOT_DIR = pathlib.Path(__file__).resolve().parent.parent / "snapshots"
 TODAY = dt.datetime.now().date()
 AGE_THRESHOLD_DAYS = int(3.5 * 365)  # 1277 days
+
+# Reporting currency is USD ($). Laptop procurement and budget figures in the
+# source spreadsheets are recorded in INR, so they are converted to USD for the
+# report. Override the rate with the INR_TO_USD_RATE env var when it drifts.
+INR_TO_USD_RATE = float(os.environ.get("INR_TO_USD_RATE", "0.0117"))  # ≈ ₹85.5 / $1
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +99,20 @@ def fmt_inr(amount) -> str:
     return f"₹{n:,.0f}"
 
 
+def inr_to_usd(amount) -> float:
+    """Convert an INR amount to USD using the configured rate. Returns 0.0 for
+    non-numeric input."""
+    try:
+        return float(amount) * INR_TO_USD_RATE
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fmt_usd_from_inr(amount) -> str:
+    """Format an INR-denominated amount as USD."""
+    return fmt_usd(inr_to_usd(amount))
+
+
 def read_sheet(wb, sheet_name: str, header_row: int = 1) -> list[dict]:
     """Read a sheet into a list of dicts. Returns [] if sheet missing."""
     if sheet_name not in wb.sheetnames:
@@ -141,6 +161,12 @@ def load_data() -> dict:
         "proc_plan": read_sheet(proc_wb, "Laptop procurement plan", header_row=2),
         "actual_spend": read_sheet(proc_wb, "Actual Spends", header_row=3),
         "configuration": read_sheet(proc_wb, "Configuration"),
+        # Optional IT helpdesk/ticket log. Not present in the source files yet —
+        # the ticketing-tool / email / Slack integration is a separate task.
+        # When an "IT Issues" sheet is added to the asset workbook (columns:
+        # Date Raised, Issue, Raised By, Priority, Status, Owner) it is picked
+        # up automatically here.
+        "it_issues": read_sheet(asset_wb, "IT Issues"),
     }
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
@@ -260,12 +286,13 @@ def get_spend_pace(data: dict) -> dict:
     Returns dict with planned, actual, pct_used (or None if planned=0).
     """
     laptop_spend = get_laptop_spend(data)
-    actual = laptop_spend["total_spend"]
+    actual = laptop_spend["total_spend"]  # already USD
     planned = 0.0
     for row in data.get("proc_plan", []):
         v = row.get("Total Price (INR)")
         if isinstance(v, (int, float)):
             planned += float(v)
+    planned = inr_to_usd(planned)  # INR plan → USD to match actual
     # Planned is annual; divide by 12 for per-month budget
     monthly_planned = planned / 12 if planned else 0
     pct = None
@@ -432,6 +459,28 @@ def _fmt_delta(cur: float, prev: Optional[float], as_int: bool = True) -> str:
     return f"{sign}{diff:,.0f}"
 
 
+def _aging_remark(priority: str, warranty_end: Optional[dt.date]) -> str:
+    """Auto-generate an actionable remark for an aging laptop based on its
+    replacement priority and warranty status. No per-employee notes exist in
+    the source data, so these are derived deterministically."""
+    parts = []
+    if priority == "Critical":
+        parts.append("Replace now (>4 yrs)")
+    else:  # High
+        parts.append("Replace within 30 days")
+    if warranty_end:
+        days = (warranty_end - TODAY).days
+        if days < 0:
+            parts.append(f"Warranty expired {warranty_end.strftime('%b %Y')}")
+        elif days <= 90:
+            parts.append(f"Warranty ends {warranty_end.strftime('%b %Y')}")
+        else:
+            parts.append("In warranty")
+    else:
+        parts.append("Warranty date missing")
+    return " · ".join(parts)
+
+
 def get_aging_laptops(data: dict) -> list[dict]:
     """Return assigned laptops older than 3.5 years, sorted oldest first."""
     aging = []
@@ -440,14 +489,19 @@ def get_aging_laptops(data: dict) -> list[dict]:
             continue
         dt = parse_date(row.get("Warranty Start Date"))
         if dt and (TODAY - dt).days > AGE_THRESHOLD_DAYS:
+            priority = "Critical" if age_years(dt) > 4 else "High"
+            warranty_end = parse_date(row.get("Warranty End Date"))
             aging.append({
                 "employee": row.get("Employee Name", "Unknown"),
+                "department": row.get("Department", ""),
                 "tag": row.get("Laptop Asset Tag", ""),
                 "make": row.get("Laptop Make", ""),
                 "model": row.get("Laptop Model", ""),
                 "start_date": dt,
+                "warranty_end": warranty_end,
                 "age_years": round(age_years(dt), 1),
-                "priority": "Critical" if age_years(dt) > 4 else "High",
+                "priority": priority,
+                "remark": _aging_remark(priority, warranty_end),
             })
     aging.sort(key=lambda x: x["age_years"], reverse=True)
     return aging
@@ -520,14 +574,15 @@ def get_laptop_spend(data: dict) -> dict:
             })
             result["total_joiners"] += joiners
 
-    # Authoritative spend from the Total row
+    # Authoritative spend from the Total row. The sheet records INR, so convert
+    # to USD to match the report's reporting currency.
     if total_row:
         for key, val in total_row.items():
             key_lower = str(key).strip().lower()
             for abbr in abbrevs:
                 if abbr in key_lower and "spend" in key_lower:
                     try:
-                        result["total_spend"] = float(val) if val not in (None, "") else 0.0
+                        result["total_spend"] = inr_to_usd(val) if val not in (None, "") else 0.0
                     except (TypeError, ValueError):
                         result["total_spend"] = 0.0
 
@@ -634,6 +689,55 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float
             })
     renewals.sort(key=lambda x: x["date"])
     return app_total, renewals, hw_total, app_total + hw_total
+
+
+def _month_column_key(data: dict, year: int, month: int):
+    """Return the spend-sheet column key matching the given year/month, or None."""
+    for row in data["spend"]:
+        for key in row:
+            d = parse_date(key)
+            if d and d.year == year and d.month == month:
+                return key
+    return None
+
+
+def get_app_spend_detail(data: dict) -> dict:
+    """Richer app-spend breakdown for the monthly report.
+
+    Returns: this_month, last_month (USD totals, app rows only), delta,
+    top_apps (list of {app, dept, amount}), by_dept (dict dept→amount).
+    """
+    this_key = _month_column_key(data, TODAY.year, TODAY.month)
+    prev_dt = (TODAY.replace(day=1) - timedelta(days=1))
+    prev_key = _month_column_key(data, prev_dt.year, prev_dt.month)
+
+    this_total = 0.0
+    last_total = 0.0
+    per_app = []
+    by_dept: dict[str, float] = defaultdict(float)
+    for row in data["spend"]:
+        if _is_hardware_row(row) or _is_total_row(row):
+            continue
+        app = str(row.get("APPLICATION / SW / LICENSE", "")).strip()
+        dept = str(row.get("Department", "")).strip() or "Unassigned"
+        tv = row.get(this_key) if this_key else None
+        pv = row.get(prev_key) if prev_key else None
+        if isinstance(tv, (int, float)):
+            this_total += float(tv)
+            if app:
+                per_app.append({"app": app, "dept": dept, "amount": float(tv)})
+                by_dept[dept] += float(tv)
+        if isinstance(pv, (int, float)):
+            last_total += float(pv)
+
+    per_app.sort(key=lambda x: x["amount"], reverse=True)
+    return {
+        "this_month": this_total,
+        "last_month": last_total,
+        "delta": this_total - last_total,
+        "top_apps": per_app[:5],
+        "by_dept": dict(sorted(by_dept.items(), key=lambda kv: kv[1], reverse=True)),
+    }
 
 
 def get_upcoming_joiners(data: dict, days: int = 14) -> list[dict]:
@@ -783,79 +887,219 @@ def get_stock_vs_joiners(data: dict, days: int = 7) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# IT issues (helpdesk tickets)
+# ---------------------------------------------------------------------------
+
+# Flexible header matching — the eventual ticketing-tool / email / Slack
+# integration may label columns slightly differently.
+_ISSUE_FIELDS = {
+    "date": ("date raised", "raised date", "date", "created", "reported on"),
+    "issue": ("issue", "subject", "summary", "title", "description", "problem"),
+    "raised_by": ("raised by", "reported by", "requester", "employee", "user"),
+    "priority": ("priority", "severity", "urgency"),
+    "status": ("status", "state"),
+    "owner": ("owner", "assigned to", "assignee", "handled by"),
+}
+
+OPEN_STATUSES = ("open", "new", "in progress", "in-progress", "pending", "on hold", "reopened")
+
+
+def _match_issue_field(row: dict, field: str):
+    wanted = _ISSUE_FIELDS[field]
+    for key, val in row.items():
+        k = str(key).strip().lower()
+        if any(w == k or w in k for w in wanted):
+            return val
+    return None
+
+
+def get_it_issues(data: dict) -> dict:
+    """Summarise IT helpdesk issues from the optional 'IT Issues' sheet.
+
+    Returns a dict with keys:
+      connected (bool) — whether any issue source/data is present
+      issues (list)    — normalised rows
+      open, resolved, high_open (int)
+
+    When no source is connected, `connected` is False and the report shows a
+    placeholder rather than fabricating tickets.
+    """
+    rows = data.get("it_issues", [])
+    issues = []
+    for row in rows:
+        issue = _match_issue_field(row, "issue")
+        status_raw = _match_issue_field(row, "status")
+        if not issue and not status_raw:
+            continue
+        status = str(status_raw or "").strip()
+        priority = str(_match_issue_field(row, "priority") or "").strip()
+        issues.append({
+            "date": parse_date(_match_issue_field(row, "date")),
+            "issue": str(issue or "").strip(),
+            "raised_by": str(_match_issue_field(row, "raised_by") or "").strip(),
+            "priority": priority,
+            "status": status,
+            "owner": str(_match_issue_field(row, "owner") or "").strip(),
+            "is_open": status.lower() in OPEN_STATUSES or (status == "" and bool(issue)),
+        })
+    open_issues = [i for i in issues if i["is_open"]]
+    high_open = [i for i in open_issues if i["priority"].lower() in ("high", "critical", "urgent", "p1")]
+    # Sort: open first, then high priority, then most recent
+    issues.sort(key=lambda i: (not i["is_open"], i["date"] or dt.date.min), reverse=False)
+    return {
+        "connected": bool(rows),
+        "issues": issues,
+        "open": len(open_issues),
+        "resolved": len(issues) - len(open_issues),
+        "high_open": len(high_open),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Action items for the IT manager
+# ---------------------------------------------------------------------------
+
+def get_action_items(data: dict, hc: dict) -> list[dict]:
+    """Synthesise a prioritised, deduplicated to-do list for the IT manager
+    from the signals already in the data. Each item is {priority, text} where
+    priority is one of 🔴/🟡/🟢 (sorted most urgent first)."""
+    items: list[dict] = []
+
+    runway = hc["_runway_weeks"]
+    joiners_7 = hc["_joiners_7"]
+    stock_ready = hc["_stock_ready"]
+    critical = hc["_critical_aging"]
+    pace_pct = hc["_pace_pct"]
+
+    # 1. Joiner stock shortage (most time-critical)
+    if joiners_7 > stock_ready:
+        gap = joiners_7 - stock_ready
+        items.append({"priority": "🔴",
+                      "text": f"Order {gap} laptop(s) now — {joiners_7} joiners next week vs {stock_ready} in stock"})
+    elif joiners_7 and stock_ready - joiners_7 <= 2:
+        items.append({"priority": "🟡",
+                      "text": f"Tight stock for joiners ({stock_ready} ready vs {joiners_7} next week) — line up procurement"})
+
+    # 2. Stock runway
+    if runway is not None and runway < 2:
+        items.append({"priority": "🔴",
+                      "text": f"Replenish laptop stock — runway only {runway} weeks at current pace"})
+    elif runway is not None and runway < 4:
+        items.append({"priority": "🟡",
+                      "text": f"Plan a laptop purchase — runway {runway} weeks"})
+
+    # 3. Critical aging replacements
+    if critical > 0:
+        pr = "🔴" if critical > 5 else "🟡"
+        items.append({"priority": pr,
+                      "text": f"Schedule replacement of {critical} laptop(s) over 4 years old"})
+
+    # 4. Onboarding gaps for joiners next 7 days
+    readiness = get_onboarding_readiness(data, 7)
+    if readiness is not None and readiness < 80:
+        items.append({"priority": "🟡",
+                      "text": f"Close onboarding gaps — checklist only {readiness:.0f}% complete for next week's joiners"})
+
+    # 5. Upcoming renewals
+    _, renewals, _, _ = get_current_month_spend(data)
+    if renewals:
+        items.append({"priority": "🟡",
+                      "text": f"Review {len(renewals)} subscription renewal(s) due in the next 30 days"})
+
+    # 6. Spend pace
+    if pace_pct is not None and pace_pct > 110:
+        items.append({"priority": "🔴",
+                      "text": f"Laptop spend at {pace_pct:.0f}% of monthly budget — review procurement spend"})
+
+    # 7. Open high-priority IT issues
+    issues = get_it_issues(data)
+    if issues["high_open"]:
+        items.append({"priority": "🔴",
+                      "text": f"Resolve {issues['high_open']} high-priority IT issue(s) still open"})
+    elif issues["open"]:
+        items.append({"priority": "🟢",
+                      "text": f"Work down {issues['open']} open IT issue(s)"})
+
+    if not items:
+        items.append({"priority": "🟢", "text": "No action items — stock, aging, spend and onboarding all healthy"})
+
+    order = {"🔴": 0, "🟡": 1, "🟢": 2}
+    items.sort(key=lambda x: order.get(x["priority"], 3))
+    return items
+
+
+# ---------------------------------------------------------------------------
 # Report generators
 # ---------------------------------------------------------------------------
 
-def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
-    """Concise at-a-glance dashboard. Full breakdown lives in the Word doc."""
-    lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %b %Y')}*"]
+def _overall_status(hc: dict) -> str:
+    statuses = (hc["stock"], hc["aging"], hc["joiner_prep"], hc["spend"])
+    if "🔴" in statuses:
+        return "🔴 Action Needed"
+    if "🟡" in statuses:
+        return "🟡 Needs Attention"
+    return "🟢 On Track"
 
+
+def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
+    """Concise at-a-glance dashboard for the IT head. Full breakdown in the Word doc."""
     hc = get_health_check(data, prev_snap)
-    risks = get_risk_callouts(data, hc)
+    actions = get_action_items(data, hc)
     aging = get_aging_laptops(data)
     critical_aging = [a for a in aging if a["priority"] == "Critical"]
     laptop_spend = get_laptop_spend(data)
-    app_total, renewals, hw_spend, _ = get_current_month_spend(data)
-    runway = get_procurement_runway(data)
-    joiners_7 = get_upcoming_joiners(data, 7)
-
-    # ── 1. HEALTH CHECK ──
-    lines.append(f"\n*🚦 Health Check*")
-    lines.append(
-        f"Stock {hc['stock']} · Aging {hc['aging']} · "
-        f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}"
-    )
-
-    # ── 2. RISKS & ACTIONS ──
-    if risks:
-        lines.append(f"\n*⚠️ Risks & Actions*")
-        for r in risks:
-            lines.append(f"• {r}")
-
-    # ── 3. KEY NUMBERS (vs last week) ──
-    lines.append(f"\n*📊 Key Numbers*")
+    app_total, renewals, _, _ = get_current_month_spend(data)
+    joiners_7 = get_joiners_with_laptop_needs(data, 7)
+    issues = get_it_issues(data)
     stock_ready = hc["_stock_ready"]
+
+    lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %b %Y')}*"]
+
+    # ── At a glance ──
+    lines.append(f"*{_overall_status(hc)}*  ·  Stock {hc['stock']} · Aging {hc['aging']} · "
+                 f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}")
+
+    # ── 1. Action Items for IT Manager (most important — top of the post) ──
+    lines.append(f"\n*🎯 Action Items*")
+    for a in actions[:5]:
+        lines.append(f"{a['priority']} {a['text']}")
+
+    # ── 2. Stock Ready ──
+    lines.append(f"\n*📦 Stock Ready*")
     prev_ready = (prev_snap or {}).get("stock_ready")
-    prev_aging = (prev_snap or {}).get("aging_count")
-    prev_app = (prev_snap or {}).get("app_spend_month")
-    prev_lap = (prev_snap or {}).get("laptop_spend_month")
+    delta = f" ({_fmt_delta(stock_ready, prev_ready)})" if prev_ready is not None else ""
+    lines.append(f"• Laptops ready: *{stock_ready}*{delta} · backup (3yr+): {len(data['backup'])}")
 
-    def _kn(label: str, cur, prev, fmt=lambda x: str(x)) -> str:
-        if prev is None:
-            return f"• {label}: *{fmt(cur)}*"
-        d = _fmt_delta(cur, prev, as_int=not isinstance(cur, float) or cur.is_integer())
-        return f"• {label}: *{fmt(cur)}* ({d})"
-
-    lines.append(_kn("Stock ready", stock_ready, prev_ready))
-    lines.append(f"• Joiners next 7d: *{hc['_joiners_7']}* | next 30d: *{len(get_upcoming_joiners(data, 30))}*")
-    lines.append(_kn("Aging >3.5yr", len(aging), prev_aging))
-    lines.append(_kn("Laptop spend MTD", laptop_spend["total_spend"], prev_lap, fmt=fmt_inr))
-    lines.append(_kn("App spend MTD", app_total, prev_app, fmt=fmt_usd))
-    if runway["weeks"] is not None:
-        lines.append(f"• Procurement runway: *{runway['weeks']} weeks* (avg {runway['avg_per_week']} joiners/wk)")
-
-    # ── 4. JOINERS NEXT WEEK (only if any) ──
+    # ── 3. Joiners Next Week ──
+    lines.append(f"\n*⏰ Joiners Next Week ({len(joiners_7)})*")
     if joiners_7:
-        lines.append(f"\n*⏰ Joiners Next Week ({len(joiners_7)})* — prepare laptops")
-        joiners_week = get_joiners_with_laptop_needs(data, 7)
-        for j in joiners_week[:5]:
+        for j in joiners_7[:5]:
             cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
             days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
             lines.append(f"• {j['name']} — {j['department']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
-        if len(joiners_week) > 5:
-            lines.append(f"  _…and {len(joiners_week)-5} more_")
+        if len(joiners_7) > 5:
+            lines.append(f"  _…and {len(joiners_7)-5} more_")
+    else:
+        lines.append("• None in the next 7 days ✅")
 
-    # ── 5. TOP CRITICAL AGING (top 3 only) ──
-    if critical_aging:
-        lines.append(f"\n*🔝 Top Critical Aging* (showing 3 of {len(critical_aging)})")
-        for a in critical_aging[:3]:
-            lines.append(f"• {a['employee']} — {a['make']} {a['model']} ({a['age_years']}yr)")
+    # ── 4. Laptop Aging (with remarks) ──
+    lines.append(f"\n*⏳ Laptop Aging* — {len(aging)} over 3.5yr ({len(critical_aging)} critical)")
+    for a in critical_aging[:3]:
+        lines.append(f"• {a['employee']} — {a['make']} {a['model']} ({a['age_years']}yr) · _{a['remark']}_")
 
-    # ── 6. RENEWALS (only if any) ──
+    # ── 5. IT Issues & Status ──
+    lines.append(f"\n*🐞 IT Issues & Status*")
+    if issues["connected"]:
+        lines.append(f"• Open: *{issues['open']}* ({issues['high_open']} high-priority) · Resolved: {issues['resolved']}")
+    else:
+        lines.append("• _No issue source connected yet — ticketing/email/Slack integration pending_")
+
+    # ── 6. Spend Snapshot ──
+    lines.append(f"\n*💰 Spend MTD*")
+    lines.append(f"• App/subscriptions: *{fmt_usd(app_total)}* · Laptops: *{fmt_usd(laptop_spend['total_spend'])}*")
     if renewals:
-        lines.append(f"\n*🔔 Renewals next 30d* ({len(renewals)})")
-        for r in renewals[:3]:
-            lines.append(f"• {r['app']} ({r['date'].strftime('%d %b')})")
+        lines.append(f"• 🔔 {len(renewals)} renewal(s) in next 30d: " +
+                     ", ".join(r['app'] for r in renewals[:3]) + ("…" if len(renewals) > 3 else ""))
 
     lines.append(f"\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
     return "\n".join(lines)
@@ -892,16 +1136,48 @@ def generate_joiner_alert(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _fx_footnote() -> str:
+    rate = round(1 / INR_TO_USD_RATE, 1) if INR_TO_USD_RATE else 0
+    return (f"_Currency: USD ($). Laptop procurement & budget figures are recorded in INR "
+            f"and converted at $1 = ₹{rate} (set via INR_TO_USD_RATE)._")
+
+
 def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines = [f"# IT Weekly Report — {TODAY.strftime('%d %B %Y')}\n"]
 
-    # ── Dashboard preamble ──
     hc = get_health_check(data, prev_snap)
-    risks = get_risk_callouts(data, hc)
+    actions = get_action_items(data, hc)
     runway = get_procurement_runway(data)
     pace = get_spend_pace(data)
+    aging = get_aging_laptops(data)
+    laptop_spend = get_laptop_spend(data)
+    app_total, renewals, hw_spend, grand_total = get_current_month_spend(data)
+    issues = get_it_issues(data)
 
-    lines.append("## 🚦 Health Check\n")
+    # Fleet stats (used in At a Glance + Summary)
+    assigned_rows = [r for r in data["assigned"] if is_truly_assigned(r)]
+    total_assigned = len(assigned_rows)
+    total_stock = len(data["in_stock"])
+    total_laptops = total_assigned + total_stock + len(data['backup'])
+
+    # ── 📌 AT A GLANCE (one-screen read for the IT head) ──
+    lines.append("## 📌 At a Glance\n")
+    lines.append(f"**Overall status: {_overall_status(hc)}**\n")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Stock ready (laptops) | {hc['_stock_ready']} |")
+    lines.append(f"| Joiners next 7 days | {hc['_joiners_7']} |")
+    lines.append(f"| Laptops > 3.5yr ({hc['_critical_aging']} critical) | {len(aging)} |")
+    lines.append(f"| Open IT issues | {issues['open'] if issues['connected'] else '—'} |")
+    lines.append(f"| App spend MTD | {fmt_usd(app_total)} |")
+    lines.append(f"| Laptop spend MTD | {fmt_usd(laptop_spend['total_spend'])} |")
+    if runway["weeks"] is not None:
+        lines.append(f"| Procurement runway | {runway['weeks']} weeks |")
+    top_action = actions[0]
+    lines.append(f"\n**👉 Top action:** {top_action['priority']} {top_action['text']}")
+
+    # ── 🚦 Health Check ──
+    lines.append("\n## 🚦 Health Check\n")
     lines.append("| Area | Status |")
     lines.append("|------|--------|")
     lines.append(f"| Stock | {hc['stock']} |")
@@ -909,25 +1185,16 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines.append(f"| Joiner Prep | {hc['joiner_prep']} |")
     lines.append(f"| Spend | {hc['spend']} |")
 
-    if risks:
-        lines.append("\n## ⚠️ Risks & Actions\n")
-        for r in risks:
-            # Strip Slack-style bold (* → markdown __ would italic; keep plain)
-            lines.append(f"- {r.replace('*', '')}")
+    # ── 🎯 Action Items for IT Manager ──
+    lines.append("\n## 🎯 Action Items for IT Manager\n")
+    lines.append("| # | Priority | Action |")
+    lines.append("|---|----------|--------|")
+    for n, a in enumerate(actions, 1):
+        lines.append(f"| {n} | {a['priority']} | {a['text']} |")
 
-    lines.append("\n## 📊 Headline Metrics\n")
-    lines.append("| Metric | Value |")
-    lines.append("|--------|-------|")
-    lines.append(f"| Procurement runway | {runway['weeks']} weeks (avg {runway['avg_per_week']} joiners/wk over 4w) |")
-    lines.append(f"| Critical aging laptops | {hc['_critical_aging']} |")
-    lines.append(f"| Joiners next 7 days | {hc['_joiners_7']} |")
-    lines.append(f"| Stock ready | {hc['_stock_ready']} |")
-    if pace["pct_used"] is not None:
-        lines.append(f"| Laptop spend pace | {pace['pct_used']:.0f}% of monthly budget ({fmt_inr(pace['actual'])} / {fmt_inr(pace['monthly_planned'])}) |")
-
-    # Stock (side-by-side with previous snapshot)
+    # ── 📦 Stock Ready ──
     stock = get_stock_summary(data)
-    lines.append("\n## 1. Stock Levels\n")
+    lines.append("\n## 📦 Stock Ready\n")
     if prev_snap and prev_snap.get("date"):
         prev_date = prev_snap["date"]
         cur_ready = stock.get("Laptops (ready)", 0)
@@ -944,9 +1211,19 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
         for item, count in stock.items():
             lines.append(f"| {item} | {count} |")
 
+    if data["other_stock"]:
+        lines.append("\n### Other Assets in Stock\n")
+        lines.append("| Item | Qty |")
+        lines.append("|------|-----|")
+        for row in data["other_stock"]:
+            item = row.get("Other Assets Instock", "")
+            qty = row.get("Qty", "")
+            if item:
+                lines.append(f"| {item} | {qty} |")
+
     # Activity: This Week vs Last Week
     cmp = get_weekly_activity_comparison(data)
-    lines.append("\n## 1a. Activity: This Week vs Last Week\n")
+    lines.append("\n### Activity: This Week vs Last Week\n")
     lines.append("| Metric | This Week | Last Week | Δ |")
     lines.append("|--------|-----------|-----------|---|")
     for label, key in [
@@ -959,110 +1236,9 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
         prev_v = cmp[key]["prev"]
         lines.append(f"| {label} | {this_v} | {prev_v} | {_fmt_delta(this_v, prev_v)} |")
 
-    # Other assets in stock
-    if data["other_stock"]:
-        lines.append("\n### Other Assets in Stock\n")
-        lines.append("| Item | Qty |")
-        lines.append("|------|-----|")
-        for row in data["other_stock"]:
-            item = row.get("Other Assets Instock", "")
-            qty = row.get("Qty", "")
-            if item:
-                lines.append(f"| {item} | {qty} |")
-
-    # Assignments
-    assignments = get_recent_assignments(data, 7)
-    lines.append(f"\n## 2. New Assignments This Week ({len(assignments)})\n")
-    if assignments:
-        lines.append("| Employee | Laptop | Type |")
-        lines.append("|----------|--------|------|")
-        for a in assignments:
-            lines.append(f"| {a.get('Username', 'N/A')} | {a.get('Laptop Make', '')} {a.get('Laptop Model', '')} | {a.get('New Joiner/Replacement', '')} |")
-    else:
-        lines.append("No new assignments this week.")
-
-    # Returns
-    returns = get_recent_returns(data, 7)
-    lines.append(f"\n## 3. Laptop Returns This Week ({len(returns)})\n")
-    if returns:
-        lines.append("| Employee | Laptop | Reason |")
-        lines.append("|----------|--------|--------|")
-        for r in returns:
-            lines.append(f"| {r.get('Username', 'N/A')} | {r.get('Laptop Make', '')} {r.get('Laptop Model', '')} | {r.get('Resigned/Replacement', '')} |")
-
-    # Aging — full table
-    aging = get_aging_laptops(data)
-    lines.append(f"\n## 4. Aging Analysis ({len(aging)} laptops > 3.5 years)\n")
-    if aging:
-        lines.append("| Employee | Asset Tag | Make/Model | Purchase Date | Age (yrs) | Priority |")
-        lines.append("|----------|-----------|------------|---------------|-----------|----------|")
-        for a in aging:
-            lines.append(f"| {a['employee']} | {a['tag']} | {a['make']} {a['model']} | {a['start_date']} | {a['age_years']} | {a['priority']} |")
-
-    # Age distribution
-    dist = get_age_distribution(data)
-    lines.append("\n### Age Distribution\n")
-    lines.append("| Bracket | Count |")
-    lines.append("|---------|-------|")
-    for bracket, count in dist.items():
-        lines.append(f"| {bracket} | {count} |")
-
-    # Laptop Procurement
-    laptop_spend = get_laptop_spend(data)
-    purchases = get_purchases_this_month(data)
-    procured_full = laptop_spend["total_joiners"] if laptop_spend["total_spend"] > 0 else 0
-    lines.append(f"\n## 5. Laptop Procurement — {TODAY.strftime('%B %Y')}\n")
-    if laptop_spend["total_joiners"] or laptop_spend["total_spend"]:
-        lines.append("### Summary\n")
-        lines.append("| Metric | Value |")
-        lines.append("|--------|-------|")
-        lines.append(f"| Joiners this month | {laptop_spend['total_joiners']} |")
-        lines.append(f"| Laptop spend this month | {fmt_inr(laptop_spend['total_spend'])} |")
-        lines.append(f"| Laptops procured this month | {procured_full} |")
-        if procured_full > 0:
-            lines.append("")
-            lines.append("### Breakdown by Model\n")
-            lines.append("| Model | Joiners |")
-            lines.append("|-------|---------|")
-            for m in laptop_spend["models"]:
-                lines.append(f"| {m['model']} | {m['joiners']} |")
-    else:
-        lines.append("No laptop procurement data for this month.\n")
-    if purchases:
-        lines.append(f"\n### New Laptops Purchased ({len(purchases)})\n")
-        lines.append("| Brand | Model | Serial | Purchase Date |")
-        lines.append("|-------|-------|--------|---------------|")
-        for p in purchases:
-            lines.append(f"| {p['brand']} | {p['model']} | {p['serial']} | {p['date'].strftime('%d %b %Y')} |")
-
-    # App Spend
-    total_spend, renewals, hw_spend, grand_total = get_current_month_spend(data)
-    lines.append(f"\n## 6. App Spend — {TODAY.strftime('%B %Y')}\n")
-    lines.append("| Category | Amount |")
-    lines.append("|----------|--------|")
-    lines.append(f"| Apps / Subscriptions | {fmt_usd(total_spend)} |")
-    lines.append(f"| Hardware (laptops/antivirus, excluded from app spend) | {fmt_usd(hw_spend)} |")
-    lines.append(f"| **Sheet total** | **{fmt_usd(grand_total)}** |")
-    lines.append("")
-    if renewals:
-        lines.append("### Upcoming Renewals (next 30 days)\n")
-        lines.append("| Application | Department | Renewal Date | Frequency |")
-        lines.append("|-------------|------------|--------------|-----------|")
-        for r in renewals:
-            lines.append(f"| {r['app']} | {r['dept']} | {r['date'].strftime('%d %b %Y')} | {r['frequency']} |")
-
-    # Joiners
-    joiners = get_upcoming_joiners(data, 30)
-    lines.append(f"\n## 7. Upcoming Joiners (next 30 days) — {len(joiners)}\n")
-    if joiners:
-        lines.append("| Name | Department | Designation | DOJ |")
-        lines.append("|------|------------|-------------|-----|")
-        for j in joiners:
-            lines.append(f"| {j['name']} | {j['department']} | {j['designation']} | {j['doj'].strftime('%d %b %Y')} |")
-
-    # Joiners Next Week — Laptop needs
+    # ── ⏰ Joiners Next Week ──
     joiners_week = get_joiners_with_laptop_needs(data, 7)
-    lines.append(f"\n### ⏰ Joiners Next Week ({len(joiners_week)}) — Laptop Prep Reminder\n")
+    lines.append(f"\n## ⏰ Joiners Next Week ({len(joiners_week)})\n")
     if joiners_week:
         lines.append("| Name | Department | Designation | DOJ | Days | Laptop Config |")
         lines.append("|------|------------|-------------|-----|------|---------------|")
@@ -1070,12 +1246,12 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
             days = f"{j['days_until']}d" if j['days_until'] > 0 else "today"
             lines.append(f"| {j['name']} | {j['department']} | {j['designation']} | {j['doj'].strftime('%d %b %Y')} | {days} | {j['laptop_config'] or '—'} |")
     else:
-        lines.append("No joiners in the next 7 days.")
+        lines.append("No joiners in the next 7 days. ✅")
 
     # Stock vs Joiners Analysis
     svj = get_stock_vs_joiners(data, 7)
     icon = {"ok": "✅", "watch": "🟡", "short": "🔴"}[svj["status"]]
-    lines.append(f"\n### {icon} Stock vs Joiners Analysis\n")
+    lines.append(f"\n### {icon} Stock vs Joiners\n")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     lines.append(f"| Laptops ready in stock | {svj['stock_ready']} |")
@@ -1091,21 +1267,101 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     else:
         lines.append(f"\n**✅ Stock sufficient** for next 30 days of joiners.")
 
-    # Summary stats (filter out In Stock / blank rows)
-    assigned_rows = [r for r in data["assigned"] if is_truly_assigned(r)]
-    total_assigned = len(assigned_rows)
-    total_stock = len(data["in_stock"])
+    # Upcoming joiners (next 30 days)
+    joiners_30 = get_upcoming_joiners(data, 30)
+    lines.append(f"\n### Upcoming Joiners — next 30 days ({len(joiners_30)})\n")
+    if joiners_30:
+        lines.append("| Name | Department | Designation | DOJ |")
+        lines.append("|------|------------|-------------|-----|")
+        for j in joiners_30:
+            lines.append(f"| {j['name']} | {j['department']} | {j['designation']} | {j['doj'].strftime('%d %b %Y')} |")
+    else:
+        lines.append("None in the next 30 days.")
+
+    # ── ⏳ Laptop Aging (with employee remarks) ──
+    lines.append(f"\n## ⏳ Laptop Aging — {len(aging)} laptops over 3.5 years\n")
+    if aging:
+        lines.append("| Employee | Dept | Asset Tag | Make/Model | Purchase | Age (yrs) | Priority | Remarks |")
+        lines.append("|----------|------|-----------|------------|----------|-----------|----------|---------|")
+        for a in aging:
+            lines.append(f"| {a['employee']} | {a['department']} | {a['tag']} | {a['make']} {a['model']} | "
+                         f"{a['start_date']} | {a['age_years']} | {a['priority']} | {a['remark']} |")
+    else:
+        lines.append("No laptops over 3.5 years currently assigned. ✅")
+
+    dist = get_age_distribution(data)
+    lines.append("\n### Age Distribution\n")
+    lines.append("| Bracket | Count |")
+    lines.append("|---------|-------|")
+    for bracket, count in dist.items():
+        lines.append(f"| {bracket} | {count} |")
+
+    # ── 🐞 IT Issues & Status ──
+    lines.append("\n## 🐞 IT Issues & Status\n")
+    if issues["connected"]:
+        lines.append(f"Open: **{issues['open']}** ({issues['high_open']} high-priority) · "
+                     f"Resolved: **{issues['resolved']}**\n")
+        lines.append("| Date | Issue | Raised By | Priority | Status | Owner |")
+        lines.append("|------|-------|-----------|----------|--------|-------|")
+        for it in issues["issues"][:25]:
+            d = it["date"].strftime('%d %b') if it["date"] else "—"
+            lines.append(f"| {d} | {it['issue']} | {it['raised_by'] or '—'} | {it['priority'] or '—'} | "
+                         f"{it['status'] or '—'} | {it['owner'] or '—'} |")
+    else:
+        lines.append("_No issue source connected yet._ IT issues are tracked across the ticketing tool, "
+                     "email and Slack; an integration to pull them automatically is planned. Once an "
+                     "**\"IT Issues\"** sheet (columns: Date Raised, Issue, Raised By, Priority, Status, Owner) "
+                     "is added to the asset workbook, this section populates automatically.")
+
+    # ── 💰 Spend (App + Laptop) MTD ──
+    lines.append(f"\n## 💰 Spend — {TODAY.strftime('%B %Y')} (MTD)\n")
+    lines.append("### App / Subscriptions\n")
+    lines.append("| Category | Amount |")
+    lines.append("|----------|--------|")
+    lines.append(f"| Apps / Subscriptions | {fmt_usd(app_total)} |")
+    lines.append(f"| Hardware (laptops/antivirus, excluded from app spend) | {fmt_usd(hw_spend)} |")
+    lines.append(f"| **Sheet total** | **{fmt_usd(grand_total)}** |")
+    if renewals:
+        lines.append("\n### Upcoming Renewals (next 30 days)\n")
+        lines.append("| Application | Department | Renewal Date | Frequency |")
+        lines.append("|-------------|------------|--------------|-----------|")
+        for r in renewals:
+            lines.append(f"| {r['app']} | {r['dept']} | {r['date'].strftime('%d %b %Y')} | {r['frequency']} |")
+
+    purchases = get_purchases_this_month(data)
+    procured_full = laptop_spend["total_joiners"] if laptop_spend["total_spend"] > 0 else 0
+    lines.append("\n### Laptop Procurement\n")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Joiners this month | {laptop_spend['total_joiners']} |")
+    lines.append(f"| Laptop spend this month | {fmt_usd(laptop_spend['total_spend'])} |")
+    lines.append(f"| Laptops procured this month | {procured_full} |")
+    if pace["pct_used"] is not None:
+        lines.append(f"| Spend pace | {pace['pct_used']:.0f}% of monthly budget ({fmt_usd(pace['actual'])} / {fmt_usd(pace['monthly_planned'])}) |")
+    if procured_full > 0 and laptop_spend["models"]:
+        lines.append("\n**Breakdown by Model**\n")
+        lines.append("| Model | Joiners |")
+        lines.append("|-------|---------|")
+        for m in laptop_spend["models"]:
+            lines.append(f"| {m['model']} | {m['joiners']} |")
+    if purchases:
+        lines.append(f"\n**New Laptops Purchased ({len(purchases)})**\n")
+        lines.append("| Brand | Model | Serial | Purchase Date |")
+        lines.append("|-------|-------|--------|---------------|")
+        for p in purchases:
+            lines.append(f"| {p['brand']} | {p['model']} | {p['serial']} | {p['date'].strftime('%d %b %Y')} |")
+
+    # ── 📊 Fleet Summary ──
     avg_age = 0
     age_count = 0
     for row in assigned_rows:
-        dt = parse_date(row.get("Warranty Start Date"))
-        if dt:
-            avg_age += age_years(dt)
+        d = parse_date(row.get("Warranty Start Date"))
+        if d:
+            avg_age += age_years(d)
             age_count += 1
     avg_age = round(avg_age / age_count, 1) if age_count else 0
 
-    total_laptops = total_assigned + total_stock + len(data['backup'])
-    lines.append("\n## 8. Summary\n")
+    lines.append("\n## 📊 Fleet Summary\n")
     lines.append(f"| Metric | Value |")
     lines.append(f"|--------|-------|")
     lines.append(f"| **Total Laptops** | **{total_laptops}** |")
@@ -1114,93 +1370,159 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     lines.append(f"| Backup Laptops (3yr+) | {len(data['backup'])} |")
     lines.append(f"| Average Laptop Age | {avg_age} years |")
     lines.append(f"| Laptops > 3.5yr | {len(aging)} |")
-    lines.append(f"| Laptop Spend This Month | {fmt_inr(laptop_spend['total_spend'])} |")
-    lines.append(f"| App Spend This Month | {fmt_usd(total_spend)} |")
-    lines.append(f"| Upcoming Joiners (30d) | {len(joiners)} |")
+    lines.append(f"| Laptop Spend This Month | {fmt_usd(laptop_spend['total_spend'])} |")
+    lines.append(f"| App Spend This Month | {fmt_usd(app_total)} |")
+    lines.append(f"| Upcoming Joiners (30d) | {len(joiners_30)} |")
 
-    lines.append(f"\n---\n_Generated: {TODAY.strftime('%d %B %Y')}_")
+    lines.append(f"\n---\n{_fx_footnote()}")
+    lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
 
 
 def generate_monthly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
-    """Concise monthly dashboard."""
-    lines = [f"*📊 IT Monthly Report — {TODAY.strftime('%B %Y')}*"]
-
+    """Concise monthly dashboard for the IT head."""
     hc = get_health_check(data, prev_snap)
-    risks = get_risk_callouts(data, hc)
+    actions = get_action_items(data, hc)
     aging = get_aging_laptops(data)
     critical_aging = [a for a in aging if a["priority"] == "Critical"]
     laptop_spend = get_laptop_spend(data)
     app_total, renewals, _, _ = get_current_month_spend(data)
+    app_detail = get_app_spend_detail(data)
     pace = get_spend_pace(data)
+    issues = get_it_issues(data)
     total_assigned = sum(1 for r in data["assigned"] if is_truly_assigned(r))
     total_laptops = total_assigned + len(data["in_stock"]) + len(data["backup"])
     assignments_month = get_recent_assignments(data, 30)
     replacements = [a for a in assignments_month if str(a.get("New Joiner/Replacement", "")).lower() == "replacement"]
-    joiners_30 = get_upcoming_joiners(data, 30)
+    joiners_30 = get_joiners_with_laptop_needs(data, 30)
+    joiners_7 = get_joiners_with_laptop_needs(data, 7)
     joiners_90 = get_upcoming_joiners(data, 90)
 
-    # ── 1. Health Check ──
-    lines.append(f"\n*🚦 Health Check*")
-    lines.append(
-        f"Stock {hc['stock']} · Aging {hc['aging']} · "
-        f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}"
-    )
+    lines = [f"*📊 IT Monthly Report — {TODAY.strftime('%B %Y')}*"]
 
-    # ── 2. Risks ──
-    if risks:
-        lines.append(f"\n*⚠️ Risks & Actions*")
-        for r in risks:
-            lines.append(f"• {r}")
+    # ── At a glance ──
+    lines.append(f"*{_overall_status(hc)}*  ·  Stock {hc['stock']} · Aging {hc['aging']} · "
+                 f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}")
 
-    # ── 3. Monthly Highlights ──
-    lines.append(f"\n*📊 Monthly Highlights*")
-    lines.append(f"• Total laptops: *{total_laptops}* (Assigned {total_assigned} · Stock {len(data['in_stock'])} · Backup {len(data['backup'])})")
-    lines.append(f"• New assignments this month: *{len(assignments_month)}* ({len(replacements)} replacements)")
+    # ── 1. Action Items ──
+    lines.append(f"\n*🎯 Action Items*")
+    for a in actions[:5]:
+        lines.append(f"{a['priority']} {a['text']}")
+
+    # ── 2. Monthly Highlights ──
+    lines.append(f"\n*📈 Monthly Highlights*")
+    lines.append(f"• Fleet: *{total_laptops}* (Assigned {total_assigned} · Ready {len(data['in_stock'])} · Backup {len(data['backup'])})")
+    lines.append(f"• Assignments this month: *{len(assignments_month)}* ({len(replacements)} replacements)")
     lines.append(f"• Aging >3.5yr: *{len(aging)}* ({hc['_critical_aging']} critical)")
-    lines.append(f"• Laptop spend MTD: *{fmt_inr(laptop_spend['total_spend'])}*" +
-                 (f" ({pace['pct_used']:.0f}% of budget)" if pace['pct_used'] is not None else ""))
-    lines.append(f"• App spend MTD: *{fmt_usd(app_total)}*")
 
-    # ── 4. Procurement Recommendation ──
-    aging_critical_count = hc["_critical_aging"]
-    need = len(joiners_30) + aging_critical_count - hc["_stock_ready"]
+    # ── 3. Stock Ready ──
+    lines.append(f"\n*📦 Stock Ready*: *{len(data['in_stock'])}* laptops + {len(data['backup'])} backup (3yr+)")
+
+    # ── 4. Joiners ──
+    lines.append(f"\n*⏰ Joiners*: next 7d *{len(joiners_7)}* · next 30d *{len(joiners_30)}* · 90d forecast {len(joiners_90)}")
+
+    # ── 5. IT Issues & Status ──
+    if issues["connected"]:
+        lines.append(f"\n*🐞 IT Issues*: Open *{issues['open']}* ({issues['high_open']} high) · Resolved {issues['resolved']}")
+    else:
+        lines.append(f"\n*🐞 IT Issues*: _no source connected yet (integration pending)_")
+
+    # ── 6. Monthly Spend ──
+    mom = _fmt_delta(app_detail["this_month"], app_detail["last_month"], as_int=False) if app_detail["last_month"] else "—"
+    lines.append(f"\n*💰 Monthly Spend*")
+    lines.append(f"• App/subscriptions: *{fmt_usd(app_total)}* (vs last month {fmt_usd(app_detail['last_month'])}, Δ {mom})")
+    lines.append(f"• Laptops: *{fmt_usd(laptop_spend['total_spend'])}*" +
+                 (f" ({pace['pct_used']:.0f}% of budget)" if pace['pct_used'] is not None else ""))
+
+    # ── 7. Procurement Recommendation ──
+    need = len(joiners_30) + hc["_critical_aging"] - hc["_stock_ready"]
     lines.append(f"\n*🛒 Procurement Recommendation*")
     if need > 0:
-        lines.append(f"• ⚠️ *Order {need} laptops*: {len(joiners_30)} joiners + {aging_critical_count} critical replacements vs {hc['_stock_ready']} in stock")
+        lines.append(f"⚠️ *Order {need} laptops*: {len(joiners_30)} joiners + {hc['_critical_aging']} critical replacements vs {hc['_stock_ready']} in stock")
     else:
-        lines.append(f"• ✅ Stock sufficient: {hc['_stock_ready']} available for {len(joiners_30)} joiners + {aging_critical_count} replacements")
-    lines.append(f"• 90-day joiner forecast: {len(joiners_90)}")
+        lines.append(f"✅ Stock sufficient: {hc['_stock_ready']} for {len(joiners_30)} joiners + {hc['_critical_aging']} replacements")
 
-    # ── 5. Top Critical Aging ──
-    if critical_aging:
-        lines.append(f"\n*🔝 Top Critical Aging* (showing 3 of {len(critical_aging)})")
-        for a in critical_aging[:3]:
-            lines.append(f"• {a['employee']} — {a['make']} {a['model']} ({a['age_years']}yr)")
-
-    # ── 6. Upcoming Renewals ──
+    # ── 8. Renewals ──
     if renewals:
-        lines.append(f"\n*🔔 Upcoming Renewals*")
-        for r in renewals[:5]:
-            lines.append(f"• {r['app']} ({r['date'].strftime('%d %b')})")
+        lines.append(f"\n*🔔 Renewals next 30d* ({len(renewals)}): " +
+                     ", ".join(r['app'] for r in renewals[:5]) + ("…" if len(renewals) > 5 else ""))
 
     lines.append(f"\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
     return "\n".join(lines)
 
 
 def generate_monthly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
-    """Monthly full report includes everything from weekly + extra sections."""
-    # Start with weekly full report content
+    """Monthly full report = all weekly sections + monthly deep-dive sections."""
     lines = [f"# IT Monthly Report — {TODAY.strftime('%B %Y')}\n"]
 
-    # Include all weekly sections
+    # Reuse the weekly body, dropping its H1 title and trailing footer (the
+    # monthly footer is appended once at the very end).
     weekly = generate_weekly_full(data, prev_snap)
-    # Skip the weekly header, use the rest
-    weekly_lines = weekly.split("\n")[1:]
-    lines.extend(weekly_lines)
+    body = weekly.split("\n", 1)[1] if "\n" in weekly else ""
+    if "\n---\n" in body:
+        body = body.rsplit("\n---\n", 1)[0]
+    lines.extend(body.rstrip().split("\n"))
 
-    # Section: Procurement Plan vs Actual
-    lines.append(f"\n## 8. Budget vs Actual\n")
+    # ── 📈 Monthly App Spend ──
+    app_detail = get_app_spend_detail(data)
+    lines.append(f"\n## 📈 Monthly App Spend — {TODAY.strftime('%B %Y')}\n")
+    mom = _fmt_delta(app_detail["this_month"], app_detail["last_month"], as_int=False) if app_detail["last_month"] else "—"
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| This month | {fmt_usd(app_detail['this_month'])} |")
+    lines.append(f"| Last month | {fmt_usd(app_detail['last_month'])} |")
+    lines.append(f"| Month-over-month | {mom} |")
+    if app_detail["top_apps"]:
+        lines.append("\n### Top 5 App Subscriptions\n")
+        lines.append("| Application | Department | This Month |")
+        lines.append("|-------------|------------|------------|")
+        for a in app_detail["top_apps"]:
+            lines.append(f"| {a['app']} | {a['dept']} | {fmt_usd(a['amount'])} |")
+    if app_detail["by_dept"]:
+        lines.append("\n### App Spend by Department\n")
+        lines.append("| Department | This Month |")
+        lines.append("|------------|------------|")
+        for dept, amt in app_detail["by_dept"].items():
+            lines.append(f"| {dept} | {fmt_usd(amt)} |")
+
+    # ── 💻 Monthly Laptop Spend ──
+    laptop_spend = get_laptop_spend(data)
+    pace = get_spend_pace(data)
+    prev_lap = (prev_snap or {}).get("laptop_spend_month")
+    lines.append(f"\n## 💻 Monthly Laptop Spend — {TODAY.strftime('%B %Y')}\n")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Laptop spend this month | {fmt_usd(laptop_spend['total_spend'])} |")
+    if prev_lap is not None:
+        lines.append(f"| Last reported period | {fmt_usd(prev_lap)} |")
+    lines.append(f"| Joiners served this month | {laptop_spend['total_joiners']} |")
+    if pace["monthly_planned"]:
+        lines.append(f"| Monthly budget | {fmt_usd(pace['monthly_planned'])} |")
+    if pace["pct_used"] is not None:
+        lines.append(f"| Budget used | {pace['pct_used']:.0f}% |")
+    if laptop_spend["models"]:
+        lines.append("\n### Laptops by Model (this month)\n")
+        lines.append("| Model | Joiners |")
+        lines.append("|-------|---------|")
+        for m in laptop_spend["models"]:
+            lines.append(f"| {m['model']} | {m['joiners']} |")
+
+    # ── 🛒 Procurement Recommendation ──
+    hc = get_health_check(data, prev_snap)
+    joiners_30 = get_upcoming_joiners(data, 30)
+    joiners_90 = get_upcoming_joiners(data, 90)
+    need = len(joiners_30) + hc["_critical_aging"] - hc["_stock_ready"]
+    lines.append(f"\n## 🛒 Procurement Recommendation\n")
+    lines.append(f"- Stock ready: **{hc['_stock_ready']}** laptops")
+    lines.append(f"- Demand next 30 days: **{len(joiners_30)}** joiners + **{hc['_critical_aging']}** critical replacements")
+    lines.append(f"- 90-day joiner forecast: **{len(joiners_90)}**")
+    if need > 0:
+        lines.append(f"\n**⚠️ Recommendation: order {need} laptop(s)** to cover next-30-day demand with a small buffer.")
+    else:
+        lines.append(f"\n**✅ Recommendation: no immediate purchase needed** — stock covers next-30-day demand.")
+
+    # ── 🧾 Budget vs Actual ──
+    lines.append(f"\n## 🧾 Budget vs Actual\n")
     if data["proc_plan"]:
         lines.append("### Planned Procurement\n")
         lines.append("| Department | Model | Qty | Avg Price | Total |")
@@ -1212,10 +1534,12 @@ def generate_monthly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
             price = row.get("Avg Price/Laptop (INR) (As per current market price)", "")
             total = row.get("Total Price (INR)", "")
             if dept and model:
-                lines.append(f"| {dept} | {model} | {qty} | {fmt_inr(price)} | {fmt_inr(total)} |")
+                lines.append(f"| {dept} | {model} | {qty} | {fmt_usd_from_inr(price)} | {fmt_usd_from_inr(total)} |")
+    else:
+        lines.append("No procurement plan data available.")
 
-    # Onboarding checklist status
-    lines.append(f"\n## 9. Onboarding Checklist Status\n")
+    # ── ✅ Onboarding Checklist Status ──
+    lines.append(f"\n## ✅ Onboarding Checklist Status\n")
     if data["checklist"]:
         checklist_cols = ["Email ID Creation", "Reporting Manager Update", "Enable MFA",
                           "Invite on Clickup", "Invite on slack", "Asset policy Acknowledgement"]
@@ -1229,8 +1553,11 @@ def generate_monthly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
                 vals.append("✅" if v and str(v).strip().lower() not in ("", "none", "no") else "❌")
             if name:
                 lines.append(f"| {name} | " + " | ".join(vals) + " |")
+    else:
+        lines.append("No onboarding checklist data available.")
 
-    lines.append(f"\n---\n_Generated: {TODAY.strftime('%d %B %Y')}_")
+    lines.append(f"\n---\n{_fx_footnote()}")
+    lines.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
     return "\n".join(lines)
 
 
@@ -1293,7 +1620,9 @@ def main() -> None:
         overall = "🟡 Attention"
 
     readiness_pct = get_onboarding_readiness(data, 7)
-    cost_per_joiner = get_cost_per_joiner(data)
+    cost_per_joiner = get_cost_per_joiner(data)  # USD
+    issues = get_it_issues(data)
+    action_items = get_action_items(data, hc)
 
     metrics = {
         "report_type": report_type,
@@ -1311,16 +1640,19 @@ def main() -> None:
             "joiners_next_30": len(joiners_30),
             "runway_weeks": runway["weeks"],
             "avg_assignments_per_week": runway["avg_per_week"],
-            "laptop_spend_month": laptop_spend["total_spend"],
+            "laptop_spend_month": laptop_spend["total_spend"],  # USD
             "laptop_spend_pct_of_budget": pace["pct_used"],
-            "monthly_budget_inr": pace["monthly_planned"],
+            "monthly_budget_usd": pace["monthly_planned"],  # USD
             "app_spend_month_usd": app_total,
             "onboarding_readiness_pct": readiness_pct,
-            "cost_per_joiner_inr": cost_per_joiner,
+            "cost_per_joiner_usd": cost_per_joiner,
+            "it_issues_open": issues["open"] if issues["connected"] else None,
+            "it_issues_high_open": issues["high_open"] if issues["connected"] else None,
         },
         "aging_distribution": aging_dist,
         "top_aging_critical": [
-            {"name": a["employee"], "model": f"{a['make']} {a['model']}".strip(), "age_years": a["age_years"]}
+            {"name": a["employee"], "model": f"{a['make']} {a['model']}".strip(),
+             "age_years": a["age_years"], "remark": a["remark"]}
             for a in aging_all[:10]
         ],
         "stock_vs_demand": {
@@ -1335,6 +1667,13 @@ def main() -> None:
             "d30": len(joiners_30),
             "d90": len(get_upcoming_joiners(data, 90)),
         },
+        "it_issues": {
+            "connected": issues["connected"],
+            "open": issues["open"],
+            "resolved": issues["resolved"],
+            "high_open": issues["high_open"],
+        },
+        "action_items": action_items,
         "risks": get_risk_callouts(data, hc),
     }
     (OUTPUT_DIR / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str), encoding="utf-8")

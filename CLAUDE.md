@@ -24,7 +24,7 @@ This repo generates automated weekly and monthly IT asset & spend reports for Sa
 ## Rules for Claude
 
 - Read Excel files using the xlsx skill
-- Currency is USD ($) with comma separators
+- Currency is USD ($) with comma separators. Laptop procurement & budget figures are stored in INR in the source sheets and converted to USD via the `INR_TO_USD_RATE` env var (default ≈ ₹85.5/$); the rate is noted in the report footer.
 - Assets older than 3.5 years (1,277 days) are flagged for replacement
-- Never fabricate data — only report what exists in the spreadsheets
+- Never fabricate data — only report what exists in the spreadsheets. IT issues come from an optional "IT Issues" sheet; when absent the report shows a placeholder (the ticketing-tool + email + Slack feed is a future integration).
 - Save output to `output/slack-summary.md` and `output/full-report.md`
