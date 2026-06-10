@@ -1350,10 +1350,9 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
             lines.append(f"| {d} | {it['issue']} | {it['raised_by'] or '—'} | {it['priority'] or '—'} | "
                          f"{it['status'] or '—'} | {it['owner'] or '—'} |")
     else:
-        lines.append("_No issue source connected yet._ IT issues are tracked across the ticketing tool, "
-                     "email and Slack; an integration to pull them automatically is planned. Once an "
-                     "**\"IT Issues\"** sheet (columns: Date Raised, Issue, Raised By, Priority, Status, Owner) "
-                     "is added to the asset workbook, this section populates automatically.")
+        lines.append("_No issue source connected yet._ IT issues are pulled from the ClickUp IT ticket "
+                     "list by `scripts/fetch-issues.py`. Set the `CLICKUP_API_TOKEN` secret and this "
+                     "section populates automatically from ClickUp.")
 
     # ── 💰 Spend (App + Laptop) MTD ──
     lines.append(f"\n## 💰 Spend — {TODAY.strftime('%B %Y')} (MTD)\n")

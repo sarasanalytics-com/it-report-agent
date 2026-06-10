@@ -25,7 +25,7 @@ Key sheets and their columns:
 - **"Laptops sold "** — disposed laptops
 - **"Mouse"**, **"Headset"**, **"Keyboard"**, **"Charger"**, **"Harddisk"**, **"Docking station"**, **"Monitor"** — peripheral asset sheets
 - **"Other Assets Instock"** — misc stock counts
-- **"IT Issues"** _(optional, not present yet)_ — IT helpdesk/ticket log. Columns: Date Raised, Issue, Raised By, Priority, Status, Owner. Read automatically when added; until then the report shows a placeholder. The eventual feed (ticketing tool + email + Slack) is a separate integration task.
+- **IT Issues** — IT helpdesk/ticket log sourced from the **ClickUp IT ticket list** via `scripts/fetch-issues.py` (written to `data/it_issues.xlsx`; columns: Date Raised, Issue, Raised By, Priority, Status, Owner). When `CLICKUP_API_TOKEN` is unset the report shows a placeholder. ClickUp is the sole source of IT issues.
 
 ### 2. `spend_tracker.xlsx` — App & subscription spend tracker
 
