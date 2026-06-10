@@ -3,7 +3,12 @@ name: IT Monthly Report
 on:
   schedule:
     - cron: "30 3 1 * *" # 1st of every month, 9:00 AM IST (UTC+5:30)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: generate the report & upload the artifact, but DON'T post to Slack or commit the snapshot"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -37,6 +42,14 @@ jobs:
           PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
           JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
 
+      # ── 1b. Fetch IT tickets from ClickUp (best-effort; placeholder if unset) ──
+      - name: Fetch IT issues from ClickUp
+        run: python scripts/fetch-issues.py
+        continue-on-error: true
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_IT_ISSUES_LIST_ID: ${{ secrets.CLICKUP_IT_ISSUES_LIST_ID }}
+
       # ── 2. Validate downloaded data ──
       - name: Validate Excel files
         run: python scripts/validate-data.py
@@ -44,6 +57,10 @@ jobs:
       # ── 3. Generate report (pure Python, no API calls) ──
       - name: Generate monthly report
         run: python scripts/generate-report.py monthly
+        env:
+          # INR→USD conversion rate for laptop procurement & budget figures.
+          # Leave the secret unset to use the built-in default (≈ ₹85.5/$).
+          INR_TO_USD_RATE: ${{ secrets.INR_TO_USD_RATE }}
 
       # ── 4a. Generate dashboard charts ──
       - name: Generate charts
@@ -57,8 +74,9 @@ jobs:
             output/full-report.md \
             "output/IT-Monthly-Report-${MONTH_YEAR}.docx"
 
-      # ── 5. Post summary + Word doc to Slack ──
+      # ── 5. Post summary + Word doc to Slack (skipped on dry runs) ──
       - name: Post to Slack
+        if: ${{ inputs.dry_run != true }}
         run: |
           DOCX_FILE=$(ls output/*.docx 2>/dev/null | head -1)
           python scripts/post-to-slack.py \
@@ -68,9 +86,9 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
 
-      # ── 6. Commit updated snapshot back to repo ──
+      # ── 6. Commit updated snapshot back to repo (skipped on dry runs) ──
       - name: Commit snapshot
-        if: success()
+        if: ${{ success() && inputs.dry_run != true }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
