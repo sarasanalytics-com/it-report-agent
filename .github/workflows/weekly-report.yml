@@ -37,6 +37,14 @@ jobs:
           PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
           JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
 
+      # ── 1b. Fetch IT tickets from ClickUp (best-effort; placeholder if unset) ──
+      - name: Fetch IT issues from ClickUp
+        run: python scripts/fetch-issues.py
+        continue-on-error: true
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_IT_ISSUES_LIST_ID: ${{ secrets.CLICKUP_IT_ISSUES_LIST_ID }}
+
       # ── 2. Validate downloaded data ──
       - name: Validate Excel files
         run: python scripts/validate-data.py

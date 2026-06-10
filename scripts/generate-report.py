@@ -180,18 +180,33 @@ def load_data() -> dict:
         "proc_plan": read_sheet(proc_wb, "Laptop procurement plan", header_row=2),
         "actual_spend": read_sheet(proc_wb, "Actual Spends", header_row=3),
         "configuration": read_sheet(proc_wb, "Configuration"),
-        # Optional IT helpdesk/ticket log. Not present in the source files yet —
-        # the ticketing-tool / email / Slack integration is a separate task.
-        # When an "IT Issues" sheet is added to the asset workbook (columns:
-        # Date Raised, Issue, Raised By, Priority, Status, Owner) it is picked
-        # up automatically here.
-        "it_issues": read_sheet(asset_wb, "IT Issues"),
     }
+
+    # IT helpdesk tickets. Preferred source is data/it_issues.xlsx, produced by
+    # scripts/fetch-issues.py from the ClickUp IT ticket list. Falls back to an
+    # optional "IT Issues" sheet inside the asset workbook, and finally to empty
+    # (the report then shows a placeholder).
+    data["it_issues"] = _load_it_issues(asset_wb)
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
 
     return data
+
+
+def _load_it_issues(asset_wb) -> list[dict]:
+    """Load IT issues from data/it_issues.xlsx if present, else the asset
+    workbook's optional 'IT Issues' sheet, else []."""
+    issues_path = DATA_DIR / "it_issues.xlsx"
+    if issues_path.exists():
+        try:
+            iwb = openpyxl.load_workbook(issues_path, read_only=True, data_only=True)
+            rows = read_sheet(iwb, "IT Issues")
+            iwb.close()
+            return rows
+        except Exception as exc:  # corrupt/locked file shouldn't break the report
+            print(f"  Warning: could not read it_issues.xlsx: {exc}", file=sys.stderr)
+    return read_sheet(asset_wb, "IT Issues")
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +935,13 @@ _ISSUE_FIELDS = {
     "owner": ("owner", "assigned to", "assignee", "handled by"),
 }
 
-OPEN_STATUSES = ("open", "new", "in progress", "in-progress", "pending", "on hold", "reopened")
+OPEN_STATUSES = ("open", "new", "in progress", "in-progress", "pending", "on hold", "reopened",
+                 "to do", "todo", "blocked", "waiting", "acknowledged", "assigned")
+# A ticket is considered resolved only when its status is clearly terminal.
+# Anything else (including unrecognised custom statuses) counts as open, which
+# is the conservative, actionable default for an IT manager.
+CLOSED_STATUSES = ("resolved", "closed", "done", "complete", "completed",
+                   "cancelled", "canceled", "wont do", "won't do", "duplicate", "rejected")
 
 
 def _match_issue_field(row: dict, field: str):
@@ -959,7 +980,9 @@ def get_it_issues(data: dict) -> dict:
             "priority": priority,
             "status": status,
             "owner": str(_match_issue_field(row, "owner") or "").strip(),
-            "is_open": status.lower() in OPEN_STATUSES or (status == "" and bool(issue)),
+            # Resolved only when the status is clearly terminal; everything else
+            # (incl. blank or unknown custom statuses) is treated as open.
+            "is_open": status.lower() not in CLOSED_STATUSES,
         })
     open_issues = [i for i in issues if i["is_open"]]
     high_open = [i for i in open_issues if i["priority"].lower() in ("high", "critical", "urgent", "p1")]
