@@ -80,13 +80,56 @@ def _normalise_task(task: dict) -> dict:
         owner = str(assignees[0].get("username") or assignees[0].get("email") or "").strip()
     raised_by = _requester_from_custom_fields(task) or str(creator.get("username", "")).strip()
     return {
+        "_task_id": str(task.get("id", "")),  # internal, not written to the sheet
         "Date Raised": _ms_to_date(task.get("date_created")),
         "Issue": str(task.get("name", "")).strip(),
         "Raised By": raised_by,
         "Priority": str(priority or "").strip().title(),
         "Status": str(status or "").strip().title(),
         "Owner": owner,
+        "Latest Update": "",  # filled from the task's latest comment (open tickets)
     }
+
+
+# Automated/template acknowledgement comments to skip when looking for the real
+# "why pending" update on a ticket.
+_AUTO_COMMENT_MARKERS = (
+    "request has been logged",
+    "thanks for reaching out",
+    "your request has been",
+    "auto-generated",
+    "this is an automated",
+)
+
+
+def fetch_latest_comment(task_id: str) -> str:
+    """Return the most recent meaningful comment on a task (skipping automated
+    acknowledgement templates). Empty string if none / on error."""
+    if not task_id:
+        return ""
+    url = f"{CLICKUP_API_V2}/task/{task_id}/comment"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        comments = resp.json().get("comments", [])  # ClickUp returns newest-first
+    except requests.RequestException:
+        return ""
+
+    def _text(c: dict) -> str:
+        # Collapse newlines so multi-line updates fit one table cell
+        return " ".join((c.get("comment_text") or "").split()).strip()
+
+    # Prefer the newest non-automated comment; fall back to newest non-empty.
+    fallback = ""
+    for c in comments:
+        text = _text(c)
+        if not text:
+            continue
+        if not fallback:
+            fallback = text
+        if not any(m in text.lower() for m in _AUTO_COMMENT_MARKERS):
+            return text
+    return fallback
 
 
 def fetch_tasks(list_id: str) -> list[dict]:
@@ -116,7 +159,7 @@ def fetch_tasks(list_id: str) -> list[dict]:
 
 
 def write_xlsx(rows: list[dict], dest: pathlib.Path) -> None:
-    headers = ["Date Raised", "Issue", "Raised By", "Priority", "Status", "Owner"]
+    headers = ["Date Raised", "Issue", "Raised By", "Priority", "Status", "Owner", "Latest Update"]
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "IT Issues"
@@ -144,7 +187,6 @@ def main() -> None:
         return  # exit 0: non-fatal — don't break the report run
 
     rows = [_normalise_task(t) for t in tasks]
-    write_xlsx(rows, dest)
 
     def _is_open(status: str) -> bool:
         return status.lower() not in (
@@ -152,6 +194,14 @@ def main() -> None:
             "cancelled", "canceled", "duplicate", "rejected")
 
     open_rows = [r for r in rows if _is_open(r["Status"])]
+
+    # Pull the latest activity/comment for OPEN tickets only — that's the real
+    # "why pending" note. Limited to open tickets to keep the API calls bounded.
+    for r in open_rows:
+        r["Latest Update"] = fetch_latest_comment(r.get("_task_id", ""))
+
+    write_xlsx(rows, dest)
+
     print(f"  ✓ Wrote {len(rows)} ticket(s) → {dest.name} "
           f"({len(open_rows)} open, {len(rows) - len(open_rows)} resolved)")
     if open_rows:
@@ -160,8 +210,10 @@ def main() -> None:
             date = r["Date Raised"] or "—"
             prio = r["Priority"] or "—"
             owner = r["Owner"] or "unassigned"
+            update = r.get("Latest Update") or "(no comment)"
             print(f"    • [{prio}] {r['Issue']} — {r['Status']} "
                   f"(raised {date} by {r['Raised By'] or '—'}, owner: {owner})")
+            print(f"        ↳ why pending: {update}")
         if len(open_rows) > 50:
             print(f"    …and {len(open_rows) - 50} more")
 

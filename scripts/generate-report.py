@@ -933,6 +933,7 @@ _ISSUE_FIELDS = {
     "priority": ("priority", "severity", "urgency"),
     "status": ("status", "state"),
     "owner": ("owner", "assigned to", "assignee", "handled by"),
+    "latest_update": ("latest update", "latest comment", "activity", "update note", "work note"),
 }
 
 OPEN_STATUSES = ("open", "new", "in progress", "in-progress", "pending", "on hold", "reopened",
@@ -954,10 +955,18 @@ def _match_issue_field(row: dict, field: str):
 
 
 def _issue_pending_remark(issue: dict) -> str:
-    """Auto-generate a short 'why is this pending' remark for an IT ticket from
-    its status, age and assignment. Resolved tickets get their closing status."""
+    """The 'why is this pending' remark for an IT ticket.
+
+    Prefers the latest activity/comment on the ticket (the real explanation,
+    e.g. "waiting on employee to visit Lenovo service center"). Falls back to a
+    status/age-derived remark only when there is no comment. Resolved tickets
+    get their closing status."""
     if not issue["is_open"]:
         return issue["status"] or "Resolved"
+
+    latest = (issue.get("latest_update") or "").strip()
+    if latest:
+        return latest
 
     s = issue["status"].lower()
     if "progress" in s:
@@ -1011,6 +1020,7 @@ def get_it_issues(data: dict) -> dict:
             "priority": priority,
             "status": status,
             "owner": str(_match_issue_field(row, "owner") or "").strip(),
+            "latest_update": str(_match_issue_field(row, "latest_update") or "").strip(),
             # Resolved only when the status is clearly terminal; everything else
             # (incl. blank or unknown custom statuses) is treated as open.
             "is_open": status.lower() not in CLOSED_STATUSES,
