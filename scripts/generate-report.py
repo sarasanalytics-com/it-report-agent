@@ -953,6 +953,37 @@ def _match_issue_field(row: dict, field: str):
     return None
 
 
+def _issue_pending_remark(issue: dict) -> str:
+    """Auto-generate a short 'why is this pending' remark for an IT ticket from
+    its status, age and assignment. Resolved tickets get their closing status."""
+    if not issue["is_open"]:
+        return issue["status"] or "Resolved"
+
+    s = issue["status"].lower()
+    if "progress" in s:
+        why = "Being worked on"
+    elif "due today" in s:
+        why = "Due today — needs closing"
+    elif "overdue" in s:
+        why = "Overdue — escalate"
+    elif "hold" in s or "wait" in s or "block" in s:
+        why = "Blocked / awaiting input"
+    elif s in ("to do", "todo", "open", "new", "reopened", ""):
+        why = "Not started — awaiting pickup"
+    else:
+        why = issue["status"] or "Open"
+
+    parts = [why]
+    if issue["date"]:
+        days = (TODAY - issue["date"]).days
+        parts.append("raised today" if days <= 0 else f"open {days}d")
+    if issue["priority"].lower() in ("high", "critical", "urgent", "p1"):
+        parts.append("high priority")
+    if not issue["owner"]:
+        parts.append("unassigned")
+    return " · ".join(parts)
+
+
 def get_it_issues(data: dict) -> dict:
     """Summarise IT helpdesk issues from the optional 'IT Issues' sheet.
 
@@ -973,7 +1004,7 @@ def get_it_issues(data: dict) -> dict:
             continue
         status = str(status_raw or "").strip()
         priority = str(_match_issue_field(row, "priority") or "").strip()
-        issues.append({
+        rec = {
             "date": parse_date(_match_issue_field(row, "date")),
             "issue": str(issue or "").strip(),
             "raised_by": str(_match_issue_field(row, "raised_by") or "").strip(),
@@ -983,7 +1014,9 @@ def get_it_issues(data: dict) -> dict:
             # Resolved only when the status is clearly terminal; everything else
             # (incl. blank or unknown custom statuses) is treated as open.
             "is_open": status.lower() not in CLOSED_STATUSES,
-        })
+        }
+        rec["remark"] = _issue_pending_remark(rec)
+        issues.append(rec)
     open_issues = [i for i in issues if i["is_open"]]
     high_open = [i for i in open_issues if i["priority"].lower() in ("high", "critical", "urgent", "p1")]
     # Sort: open first, then high priority, then most recent
@@ -1343,12 +1376,12 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
     if issues["connected"]:
         lines.append(f"Open: **{issues['open']}** ({issues['high_open']} high-priority) · "
                      f"Resolved: **{issues['resolved']}**\n")
-        lines.append("| Date | Issue | Raised By | Priority | Status | Owner |")
-        lines.append("|------|-------|-----------|----------|--------|-------|")
+        lines.append("| Date | Issue | Raised By | Priority | Status | Owner | Remarks (why pending) |")
+        lines.append("|------|-------|-----------|----------|--------|-------|-----------------------|")
         for it in issues["issues"][:25]:
             d = it["date"].strftime('%d %b') if it["date"] else "—"
             lines.append(f"| {d} | {it['issue']} | {it['raised_by'] or '—'} | {it['priority'] or '—'} | "
-                         f"{it['status'] or '—'} | {it['owner'] or '—'} |")
+                         f"{it['status'] or '—'} | {it['owner'] or '—'} | {it['remark']} |")
     else:
         lines.append("_No issue source connected yet._ IT issues are pulled from the ClickUp IT ticket "
                      "list by `scripts/fetch-issues.py`. Set the `CLICKUP_API_TOKEN` secret and this "
