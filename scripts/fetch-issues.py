@@ -31,7 +31,11 @@ import openpyxl
 import requests
 
 API_TOKEN = os.environ.get("CLICKUP_API_TOKEN", "").strip()
-LIST_ID = os.environ.get("CLICKUP_IT_ISSUES_LIST_ID", "901612104806").strip()
+# Use `or` rather than a get() default so a secret that is *set but empty*
+# (the case when CLICKUP_IT_ISSUES_LIST_ID isn't configured) still falls back
+# to the IT ticket list rather than producing an empty list ID.
+DEFAULT_LIST_ID = "901612104806"
+LIST_ID = (os.environ.get("CLICKUP_IT_ISSUES_LIST_ID") or "").strip() or DEFAULT_LIST_ID
 CLICKUP_API_V2 = "https://api.clickup.com/api/v2"
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
 
