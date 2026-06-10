@@ -141,11 +141,25 @@ def main() -> None:
 
     rows = [_normalise_task(t) for t in tasks]
     write_xlsx(rows, dest)
-    open_like = sum(1 for r in rows if r["Status"].lower() not in
-                    ("resolved", "closed", "done", "complete", "completed",
-                     "cancelled", "canceled", "duplicate", "rejected"))
+
+    def _is_open(status: str) -> bool:
+        return status.lower() not in (
+            "resolved", "closed", "done", "complete", "completed",
+            "cancelled", "canceled", "duplicate", "rejected")
+
+    open_rows = [r for r in rows if _is_open(r["Status"])]
     print(f"  ✓ Wrote {len(rows)} ticket(s) → {dest.name} "
-          f"({open_like} open-like, {len(rows) - open_like} resolved)")
+          f"({len(open_rows)} open, {len(rows) - len(open_rows)} resolved)")
+    if open_rows:
+        print(f"  Open tickets ({len(open_rows)}):")
+        for r in open_rows[:50]:
+            date = r["Date Raised"] or "—"
+            prio = r["Priority"] or "—"
+            owner = r["Owner"] or "unassigned"
+            print(f"    • [{prio}] {r['Issue']} — {r['Status']} "
+                  f"(raised {date} by {r['Raised By'] or '—'}, owner: {owner})")
+        if len(open_rows) > 50:
+            print(f"    …and {len(open_rows) - 50} more")
 
 
 if __name__ == "__main__":
