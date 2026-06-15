@@ -73,13 +73,13 @@ def _authorized(event) -> bool:
     return (event.get("user") or "").upper() in ALLOWED_USERS
 
 
-def _reply(text: str | None, say, event) -> None:
+def _reply(text: str | None, say, event, thread: bool) -> None:
     question = _clean(text)
-    thread_ts = event.get("thread_ts") or event.get("ts")
-    if not question:
-        say(text=WELCOME, thread_ts=thread_ts)
-        return
-    if question.lower() in ("hi", "hello", "hey", "help", "?"):
+    # Thread replies under a channel @mention; reply in the main flow for DMs.
+    thread_ts = (event.get("thread_ts") or event.get("ts")) if thread else None
+    log.info("Question from %s (%s): %r",
+             event.get("user"), event.get("channel_type") or "channel", (question or "")[:120])
+    if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
         return
     try:
@@ -104,9 +104,10 @@ def _guard(event, say) -> bool:
 @app.event("app_mention")
 def handle_mention(event, say):
     """Someone @mentioned the bot in a channel."""
+    log.info("app_mention from %s in %s", event.get("user"), event.get("channel"))
     if not _guard(event, say):
         return
-    _reply(event.get("text"), say, event)
+    _reply(event.get("text"), say, event, thread=True)
 
 
 @app.event("message")
@@ -116,9 +117,10 @@ def handle_message(event, say):
         return
     if event.get("bot_id") or event.get("subtype"):
         return
+    log.info("DM from %s", event.get("user"))
     if not _guard(event, say):
         return
-    _reply(event.get("text"), say, event)
+    _reply(event.get("text"), say, event, thread=False)
 
 
 def main() -> None:
