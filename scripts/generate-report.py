@@ -119,6 +119,18 @@ def fmt_inr(amount) -> str:
     return f"₹{n:,.0f}"
 
 
+def fmt_inr_full(amount) -> str:
+    """Exact INR amount with thousands separators, e.g. ₹188,850 or
+    ₹165,787.64 (no lakh/crore abbreviation — invoice figures stay precise)."""
+    try:
+        n = float(amount)
+    except (TypeError, ValueError):
+        return "N/A"
+    if abs(n - round(n)) < 0.005:
+        return f"₹{int(round(n)):,}"
+    return f"₹{n:,.2f}"
+
+
 def inr_to_usd(amount) -> float:
     """Convert an INR amount to USD using the configured rate. Returns 0.0 for
     non-numeric input."""
@@ -220,6 +232,28 @@ def load_data() -> dict:
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
+
+    # A 'ready stock' row only counts as a real laptop if it carries some
+    # identifier (make/model/serial/tag). Rows with just stray cells (e.g. a
+    # lone 'Condition') are junk and shouldn't inflate the Stock Ready count.
+    _ID_FIELDS = ("Laptop Make", "Laptop Model", "Laptop Serial Number",
+                  "Serial Number", "Serial No", "Laptop Asset Tag")
+    kept = [r for r in data["in_stock"]
+            if any(str(r.get(k, "") or "").strip() for k in _ID_FIELDS)]
+    dropped = len(data["in_stock"]) - len(kept)
+    if dropped:
+        print(f"  Excluded {dropped} in-stock row(s) with no identifier (blank/junk).",
+              file=sys.stderr)
+    data["in_stock"] = kept
+
+    # Surface any kept 'ready stock' row that has an identifier but no make/model
+    # so the 'Unspecified — …' entries can be identified and completed at source.
+    for row in data["in_stock"]:
+        if not str(row.get("Laptop Make", "") or "").strip() and \
+           not str(row.get("Laptop Model", "") or "").strip():
+            populated = {k: v for k, v in row.items() if v not in (None, "")}
+            print(f"  Note: in-stock laptop with no make/model → {populated}",
+                  file=sys.stderr)
 
     return data
 
@@ -354,14 +388,19 @@ def get_stock_by_os(data: dict) -> dict:
         ram = " ".join(str(row.get("RAM", "") or "").strip().split())
         proc = _clean_processor(row.get("Processor"))
         tag = str(row.get("Laptop Asset Tag", "") or "").strip()
+        serial = str(row.get("Laptop Serial Number", "")
+                     or row.get("Serial Number", "") or row.get("Serial No", "")
+                     or "").strip()
         parts = [p for p in (f"{make} {model}".strip(), ram, proc)
                  if p and p.lower() not in ("none", "")]
         config = " · ".join(parts)
         if not config:
-            config = tag or "details not recorded"
+            # No specs — surface whatever identifies the unit so it isn't a
+            # nameless "details not recorded" row.
+            config = tag or (f"S/N {serial}" if serial else "") or "details not recorded"
         groups[_os_label(row.get("Operating System"))].append({
             "make": make, "model": model, "ram": ram, "processor": proc,
-            "tag": tag, "config": config,
+            "tag": tag, "serial": serial, "config": config,
         })
     return dict(sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True))
 
@@ -374,8 +413,8 @@ def get_vendor_payments(data: dict) -> dict:
     """Pending vendor payments from the optional vendor sheet.
 
     Columns: Vendor Name, Inv. No, Date, Amount, Terms, Due Dt.,
-    Overdue By(Days), Status. Amounts are INR → converted to USD. Returns
-    {connected, pending(list), total_usd, count}.
+    Overdue By(Days), Status. Amounts are kept in their native INR. Returns
+    {connected, pending(list), total_inr, count}.
     """
     rows = data.get("vendor", [])
 
@@ -395,20 +434,19 @@ def get_vendor_payments(data: dict) -> dict:
             continue
         if status.lower() in _VENDOR_PAID:
             continue
-        amt_inr = _to_number(_get(row, "Amount"))
-        amt_usd = inr_to_usd(amt_inr) if amt_inr is not None else 0.0
+        amt_inr = _to_number(_get(row, "Amount")) or 0.0
         pending.append({
             "vendor": vendor,
             "invoice": str(_get(row, "Inv. No", "Invoice No", "Invoice") or "").strip(),
-            "amount_usd": amt_usd,
+            "amount_inr": amt_inr,
             "due": parse_date(_get(row, "Due Dt.", "Due Date", "Due")),
             "overdue": str(_get(row, "Overdue By(Days)", "Overdue By", "Overdue") or "").strip(),
             "status": status,
         })
-        total += amt_usd
+        total += amt_inr
     pending.sort(key=lambda x: x["due"] or dt.date.max)
     return {"connected": bool(rows), "pending": pending,
-            "total_usd": total, "count": len(pending)}
+            "total_inr": total, "count": len(pending)}
 
 
 def aging_action(a: dict) -> str:
@@ -1481,8 +1519,8 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
         if len(aging) > 8:
             L.append(f"_+{len(aging) - 8} more (oldest shown first)_")
 
-    # 7) Vendor payments pending
-    L.append(f"\n*7) 🧾 Vendor Payments Pending — {vendor['count']} · {fmt_usd(vendor['total_usd'])}*")
+    # 7) Vendor payments pending (native INR)
+    L.append(f"\n*7) 🧾 Vendor Payments Pending — {vendor['count']} · {fmt_inr_full(vendor['total_inr'])}*")
     if not vendor["connected"]:
         L.append("_No vendor payments sheet connected_")
     elif not vendor["pending"]:
@@ -1492,7 +1530,7 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
             due = v["due"].strftime('%d %b %Y') if v["due"] else "—"
             inv = f" ({v['invoice']})" if v["invoice"] else ""
             ov = f" · overdue {v['overdue']}" if v["overdue"] else ""
-            L.append(f"› {v['vendor']}{inv} — *{fmt_usd(v['amount_usd'])}* · due {due}{ov}")
+            L.append(f"› {v['vendor']}{inv} — *{fmt_inr_full(v['amount_inr'])}* · due {due}{ov}")
 
     L.append("\n_React 👍/👎 or reply with feedback._")
     return "\n".join(L)
@@ -1630,18 +1668,18 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
             L.append(f"| {a['employee']} | {a['department']} | {a['make']} {a['model']} "
                      f"| {a['age_years']} | {a['priority']} | {aging_action(a)} |")
 
-    # 7. Vendor payments pending
-    L.append(f"\n## 7. Vendor Payments Pending — {vendor['count']} · {fmt_usd(vendor['total_usd'])}\n")
+    # 7. Vendor payments pending (native INR)
+    L.append(f"\n## 7. Vendor Payments Pending — {vendor['count']} · {fmt_inr_full(vendor['total_inr'])}\n")
     if not vendor["connected"]:
         L.append("_No vendor payments sheet connected._")
     elif not vendor["pending"]:
         L.append("None pending. ✅")
     else:
-        L.append("| Vendor | Invoice | Amount | Due | Overdue | Status |")
-        L.append("|--------|---------|--------|-----|---------|--------|")
+        L.append("| Vendor | Invoice | Amount (INR) | Due | Overdue | Status |")
+        L.append("|--------|---------|--------------|-----|---------|--------|")
         for v in vendor["pending"]:
             due = v["due"].strftime('%d %b %Y') if v["due"] else "—"
-            L.append(f"| {v['vendor']} | {v['invoice'] or '—'} | {fmt_usd(v['amount_usd'])} "
+            L.append(f"| {v['vendor']} | {v['invoice'] or '—'} | {fmt_inr_full(v['amount_inr'])} "
                      f"| {due} | {v['overdue'] or '—'} | {v['status'] or '—'} |")
 
     L.append(f"\n---\n{_fx_footnote()}")
@@ -1778,9 +1816,9 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             due = v["due"].strftime('%d %b %Y') if v["due"] else "—"
             inv = f" ({v['invoice']})" if v["invoice"] else ""
             ov = f" · overdue {v['overdue']}" if v["overdue"] else ""
-            lines.append(f"› {v['vendor']}{inv} — *{fmt_usd(v['amount_usd'])}* · due {due}{ov}")
+            lines.append(f"› {v['vendor']}{inv} — *{fmt_inr_full(v['amount_inr'])}* · due {due}{ov}")
     blocks += _blk_named_section(
-        f"*🧾 7) Vendor Payments Pending — {vendor['count']} · {fmt_usd(vendor['total_usd'])}*", lines, "—")
+        f"*🧾 7) Vendor Payments Pending — {vendor['count']} · {fmt_inr_full(vendor['total_inr'])}*", lines, "—")
 
     blocks.append(_blk_divider())
     blocks.append(_blk_context(f"{_fx_footnote()}  ·  React 👍/👎 or reply with feedback."))
