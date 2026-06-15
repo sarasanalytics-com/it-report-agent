@@ -89,8 +89,8 @@ Pick the smallest instance; the bot is idle until asked.
   data; if something isn't there it says so rather than guessing.
 - **Freshness.** Data is cached for `DATA_REFRESH_TTL` seconds (default 10 min)
   and re-fetched on the next question after that.
-- **Cost.** Defaults to `claude-sonnet-4-6`; set `ANTHROPIC_MODEL=claude-haiku-4-5`
-  for the cheapest/fastest option.
+- **Cost.** Defaults to `claude-haiku-4-5` (cheap/fast, ideal for Q&A); set
+  `ANTHROPIC_MODEL=claude-sonnet-4-6` if you want higher-quality answers.
 - **Access control.** Set `BOT_ALLOWED_USERS` to a comma-separated list of Slack
   user IDs (e.g. the HR head + IT) — only they get answers; everyone else gets a
   polite decline. Find an ID in Slack: click the person's name → **More** →

@@ -34,7 +34,8 @@ OUTPUT = ROOT / "output"
 REPORT_TYPE = os.environ.get("BOT_REPORT_TYPE", "monthly")
 # How long (seconds) to reuse fetched data before refreshing.
 REFRESH_TTL = int(os.environ.get("DATA_REFRESH_TTL", "600"))
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# Haiku is cheap/fast and plenty for grounded Q&A; override for higher quality.
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 MAX_ANSWER_TOKENS = int(os.environ.get("BOT_MAX_TOKENS", "900"))
 
 _client: anthropic.Anthropic | None = None
