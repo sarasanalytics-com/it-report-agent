@@ -10,6 +10,7 @@ Required environment variables:
     SLACK_CHANNEL     – channel ID or name (e.g., C0123456789 or #it-reports)
 """
 
+import json
 import os
 import sys
 import pathlib
@@ -21,16 +22,16 @@ SLACK_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 CHANNEL = os.environ.get("SLACK_CHANNEL", "#it-reports")
 
 
-def slack_post(text: str) -> str:
-    """Post a message to Slack. Returns the message timestamp."""
+def slack_post(text: str, blocks: list | None = None) -> str:
+    """Post a message to Slack. Returns the message timestamp. When `blocks`
+    are given, they render the message and `text` is the notification fallback."""
+    payload = {"channel": CHANNEL, "text": text, "mrkdwn": True}
+    if blocks:
+        payload["blocks"] = blocks
     resp = requests.post(
         "https://slack.com/api/chat.postMessage",
         headers={"Authorization": f"Bearer {SLACK_TOKEN}"},
-        json={
-            "channel": CHANNEL,
-            "text": text,
-            "mrkdwn": True,
-        },
+        json=payload,
         timeout=30,
     )
     resp.raise_for_status()
@@ -151,8 +152,18 @@ def main() -> None:
         print("Report file is empty — skipping Slack post.", file=sys.stderr)
         sys.exit(1)
 
+    # Use the richer Block Kit layout when generate-report produced it.
+    blocks = None
+    blocks_path = md_path.parent / "slack-blocks.json"
+    if blocks_path.exists():
+        try:
+            blocks = json.loads(blocks_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"Warning: could not read slack-blocks.json ({exc}); posting text only.",
+                  file=sys.stderr)
+
     # Post the summary message
-    ts = slack_post(content)
+    ts = slack_post(content, blocks)
 
     # Upload the Word doc in a thread under the summary
     if docx_path and docx_path.exists():
