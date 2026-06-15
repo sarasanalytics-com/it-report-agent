@@ -42,6 +42,7 @@ _client: anthropic.Anthropic | None = None
 _lock = threading.Lock()
 _last_refresh = 0.0
 _context_cache = ""
+_refreshing = False
 
 SYSTEM_PROMPT = """You are a friendly IT helper in Slack for the Head of HR, \
 who is NOT technical. You answer her questions about company laptops and IT in \
@@ -57,14 +58,19 @@ How to answer:
 - Use plain, warm English. NO technical jargon or abbreviations. Avoid terms \
 like "asset tag", "OS", "MDM", "procurement", "SKU", "aging buckets". If you \
 must mention something technical, explain it in one short phrase.
-- Lead with the direct answer in a sentence, then a few short bullets if helpful.
-- Keep it brief and reassuring. Use *bold* for the key number and "• " bullets.
-- When she asks about a new joiner, tell her clearly whether a laptop is ready / \
-being arranged, and the joining date.
+- Be brief: open with a one-line direct answer, then at most 2-4 short "• " \
+bullets only if they genuinely help. Don't pad.
+- Put the key figure or name in *bold*. A tasteful emoji (✅ ⚠️ 💻 👤) is fine.
+- For a new-joiner question, give a clear *Yes / Not yet* on whether a laptop \
+is ready, plus the joining date.
+- For a person question ("what laptop does X have", "is X's laptop old?"), use \
+the EMPLOYEE LAPTOP DIRECTORY — give their laptop, its age, and whether it's \
+due for replacement. If the name isn't an exact match, say who you think they \
+mean or ask her to confirm the spelling.
 - For money, keep the currency symbols exactly as in the data (vendor bills are \
 in ₹, laptop costs in $) and don't convert them yourself.
 
-Strict rule:
+Strict rules:
 - Only use the DATA section below. If something isn't in the data, say warmly \
 that you don't have that detail and suggest she check with the IT team — never \
 guess or make up numbers, names, or dates.
@@ -96,42 +102,69 @@ def _run_step(cmd: list[str], timeout: int = 240) -> bool:
 def _build_context() -> str:
     parts = []
     full = OUTPUT / "full-report.md"
+    directory = OUTPUT / "bot-context.md"
     metrics = OUTPUT / "metrics.json"
     if full.exists():
         parts.append("# LATEST IT REPORT\n" + full.read_text(encoding="utf-8"))
+    if directory.exists():
+        parts.append(directory.read_text(encoding="utf-8"))
     if metrics.exists():
         parts.append("# STRUCTURED METRICS (JSON)\n" + metrics.read_text(encoding="utf-8"))
     return "\n\n".join(parts)
 
 
-def refresh(force: bool = False) -> str:
-    """Ensure data is fresh (within TTL) and return the context string."""
+def _do_refresh() -> None:
+    """Re-fetch data and rebuild the cached context. Serialized by _lock."""
     global _last_refresh, _context_cache
     with _lock:
-        fresh = _context_cache and (time.time() - _last_refresh) < REFRESH_TTL
-        if fresh and not force:
-            return _context_cache
-
         log.info("Refreshing IT data …")
         _run_step(["python", "scripts/fetch-excel.py"])      # spreadsheets (critical)
         _run_step(["python", "scripts/fetch-issues.py"])     # ClickUp tickets (best-effort)
         _run_step(["python", "scripts/generate-report.py", REPORT_TYPE])
-
         ctx = _build_context()
         if ctx:
             _context_cache = ctx
             _last_refresh = time.time()
             log.info("Data refreshed (%d chars of context).", len(ctx))
-        elif _context_cache:
-            log.warning("Refresh produced no new context; serving previous data.")
-        else:
+        elif not _context_cache:
             _context_cache = "(no IT data is currently available)"
-        return _context_cache
+
+
+def warm() -> None:
+    """Blocking initial load — call once at startup."""
+    _do_refresh()
+
+
+def get_context() -> str:
+    """Return the cached context immediately. If it's missing, load it
+    synchronously (first call only); if it's stale, kick off a background
+    refresh but still answer from the current cache — so questions stay fast."""
+    global _refreshing
+    if not _context_cache:
+        _do_refresh()
+    elif (time.time() - _last_refresh) >= REFRESH_TTL and not _refreshing:
+        _refreshing = True
+
+        def _bg():
+            global _refreshing
+            try:
+                _do_refresh()
+            finally:
+                _refreshing = False
+
+        threading.Thread(target=_bg, daemon=True).start()
+    return _context_cache or "(no IT data is currently available)"
+
+
+# Back-compat alias (app startup warms via this name too).
+def refresh(force: bool = False) -> str:
+    _do_refresh() if force else get_context()
+    return _context_cache
 
 
 def answer_question(question: str) -> str:
     """Answer a natural-language question from the live IT data."""
-    context = refresh()
+    context = get_context()
     client = _client_singleton()
     msg = client.messages.create(
         model=MODEL,

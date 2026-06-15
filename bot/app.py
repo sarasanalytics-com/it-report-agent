@@ -25,7 +25,7 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from answer import answer_question, refresh
+from answer import answer_question, warm
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -73,7 +73,7 @@ def _authorized(event) -> bool:
     return (event.get("user") or "").upper() in ALLOWED_USERS
 
 
-def _reply(text: str | None, say, event, thread: bool) -> None:
+def _reply(text: str | None, say, client, event, thread: bool) -> None:
     question = _clean(text)
     # Thread replies under a channel @mention; reply in the main flow for DMs.
     thread_ts = (event.get("thread_ts") or event.get("ts")) if thread else None
@@ -82,6 +82,9 @@ def _reply(text: str | None, say, event, thread: bool) -> None:
     if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
         return
+
+    # Post an instant placeholder so it never looks dead, then edit in the answer.
+    placeholder = say(text=":mag: Looking that up…", thread_ts=thread_ts)
     try:
         answer = answer_question(question)
     except Exception as exc:  # noqa: BLE001
@@ -89,7 +92,10 @@ def _reply(text: str | None, say, event, thread: bool) -> None:
         answer = (":warning: Sorry, something went wrong on my side and I "
                   "couldn't get that answer. Please try again in a moment, or "
                   f"check with the IT team. _(details: {exc})_")
-    say(text=answer, thread_ts=thread_ts)
+    try:
+        client.chat_update(channel=placeholder["channel"], ts=placeholder["ts"], text=answer)
+    except Exception:  # noqa: BLE001 - fall back to a fresh message
+        say(text=answer, thread_ts=thread_ts)
 
 
 def _guard(event, say) -> bool:
@@ -102,16 +108,16 @@ def _guard(event, say) -> bool:
 
 
 @app.event("app_mention")
-def handle_mention(event, say):
+def handle_mention(event, say, client):
     """Someone @mentioned the bot in a channel."""
     log.info("app_mention from %s in %s", event.get("user"), event.get("channel"))
     if not _guard(event, say):
         return
-    _reply(event.get("text"), say, event, thread=True)
+    _reply(event.get("text"), say, client, event, thread=True)
 
 
 @app.event("message")
-def handle_message(event, say):
+def handle_message(event, say, client):
     """Direct message to the bot. Ignore channel messages, edits and bots."""
     if event.get("channel_type") != "im":
         return
@@ -120,13 +126,13 @@ def handle_message(event, say):
     log.info("DM from %s", event.get("user"))
     if not _guard(event, say):
         return
-    _reply(event.get("text"), say, event, thread=False)
+    _reply(event.get("text"), say, client, event, thread=False)
 
 
 def main() -> None:
     # Warm the data cache on startup so the first question is fast.
     try:
-        refresh(force=True)
+        warm()
     except Exception:  # noqa: BLE001
         log.warning("Initial data warm-up failed; will retry on first question.")
     if ALLOWED_USERS:

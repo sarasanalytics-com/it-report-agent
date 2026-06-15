@@ -792,6 +792,42 @@ def get_aging_laptops(data: dict) -> list[dict]:
     return aging
 
 
+def build_employee_directory(data: dict) -> str:
+    """A full roster of who currently holds which laptop — so the bot can answer
+    per-person questions ('what laptop does X have?', 'is X's laptop old?')."""
+    rows = []
+    for row in data["assigned"]:
+        if not is_truly_assigned(row):
+            continue
+        emp = str(row.get("Employee Name", "") or "").strip()
+        if not emp:
+            continue
+        start = parse_date(row.get("Warranty Start Date"))
+        wend = parse_date(row.get("Warranty End Date"))
+        make = str(row.get("Laptop Make", "") or "").strip()
+        model = str(row.get("Laptop Model", "") or "").strip()
+        serial = str(row.get("Laptop Serial Number", "") or "").strip()
+        tag = str(row.get("Laptop Asset Tag", "") or "").strip()
+        age = round(age_years(start), 1) if start else None
+        due = bool(start and (TODAY - start).days > AGE_THRESHOLD_DAYS)
+        rows.append({
+            "emp": emp, "dept": str(row.get("Department", "") or "").strip(),
+            "laptop": f"{make} {model}".strip(), "id": serial or tag,
+            "age": age, "wend": wend, "due": due,
+        })
+    rows.sort(key=lambda r: r["emp"].lower())
+    L = [f"# EMPLOYEE LAPTOP DIRECTORY ({len(rows)} laptops currently assigned)",
+         "Who holds which laptop. 'Replace due?' = older than 3.5 years.\n",
+         "| Employee | Department | Laptop | Serial/Tag | Age (yrs) | Warranty ends | Replace due? |",
+         "|---|---|---|---|---|---|---|"]
+    for r in rows:
+        L.append(f"| {r['emp']} | {r['dept'] or '—'} | {r['laptop'] or '—'} | {r['id'] or '—'} "
+                 f"| {r['age'] if r['age'] is not None else '—'} "
+                 f"| {r['wend'].strftime('%b %Y') if r['wend'] else '—'} "
+                 f"| {'YES' if r['due'] else 'no'} |")
+    return "\n".join(L)
+
+
 def get_age_distribution(data: dict) -> dict:
     buckets = {"0-2yr": 0, "2-3yr": 0, "3-3.5yr": 0, "3.5-4yr": 0, ">4yr": 0}
     for row in data["assigned"]:
@@ -1928,6 +1964,12 @@ def main() -> None:
 
     (OUTPUT_DIR / "slack-summary.md").write_text(slack, encoding="utf-8")
     (OUTPUT_DIR / "full-report.md").write_text(full, encoding="utf-8")
+
+    # Extra context for the IT Helper bot: the full per-person laptop roster
+    # (the report only shows aggregates). Lets the bot answer "what laptop does
+    # X have?" etc.
+    (OUTPUT_DIR / "bot-context.md").write_text(
+        build_employee_directory(data), encoding="utf-8")
 
     # Slack Block Kit layout (richer visual post). post-to-slack.py uses these
     # blocks when present, with slack-summary.md as the notification fallback.
