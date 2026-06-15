@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import pathlib
 import datetime as dt
@@ -224,19 +225,54 @@ def load_data() -> dict:
 
 
 def _load_vendor_payments() -> list[dict]:
-    """Load vendor payment rows from data/vendor_payments.xlsx (first sheet) if
-    present, else []."""
+    """Load vendor payment rows from data/vendor_payments.xlsx.
+
+    The sheet often has title rows above the real header, and the table may not
+    be on the first tab, so scan every sheet for the header row (the one
+    containing a 'Vendor'-ish column plus 'Amount'/'Status') and read from
+    there. Returns the rows from the first sheet that yields data, else [].
+    """
     path = DATA_DIR / "vendor_payments.xlsx"
     if not path.exists():
         return []
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        rows = read_sheet(wb, wb.sheetnames[0])
-        wb.close()
-        return rows
     except Exception as exc:  # corrupt/locked file shouldn't break the report
         print(f"  Warning: could not read vendor_payments.xlsx: {exc}", file=sys.stderr)
         return []
+
+    def _is_header(cells: list[str]) -> bool:
+        joined = " ".join(cells)
+        return "vendor" in joined and ("amount" in joined or "status" in joined or "inv" in joined)
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        scan = list(ws.iter_rows(min_row=1, max_row=25, values_only=True))
+        hdr_idx = None
+        for idx, raw in enumerate(scan):
+            cells = [str(c).strip().lower() if c is not None else "" for c in raw]
+            if _is_header(cells):
+                hdr_idx = idx
+                break
+        if hdr_idx is None:
+            continue
+        headers = [str(c).strip() if c is not None else f"col{j}"
+                   for j, c in enumerate(scan[hdr_idx])]
+        rows = []
+        for raw in ws.iter_rows(min_row=hdr_idx + 2, values_only=True):
+            if all(c is None for c in raw):
+                continue
+            rows.append({headers[j]: raw[j] for j in range(min(len(headers), len(raw)))})
+        if rows:
+            print(f"  Vendor payments: sheet '{sheet_name}', header row {hdr_idx + 1}, "
+                  f"{len(rows)} data row(s)")
+            wb.close()
+            return rows
+
+    print("  Vendor payments: no recognizable table found in "
+          f"{wb.sheetnames}", file=sys.stderr)
+    wb.close()
+    return []
 
 
 def _load_it_issues(asset_wb) -> list[dict]:
@@ -281,6 +317,32 @@ def _os_label(value) -> str:
     return str(value).strip().title()
 
 
+def _clean_processor(value) -> str:
+    """Shorten verbose CPU strings to a readable chip name, e.g.
+    '11th Gen Intel(R) Core(TM) i5-11320H @ 3.20GHz  3.19 GHz' -> 'i5-11320H',
+    '13th Gen Intel(R) Core(TM) i7-1355U, 1700 MHz, 10 Cores' -> 'i7-1355U',
+    'Ultra 7-155H' -> 'Ultra 7-155H', 'Apple M3 Pro' -> 'M3 Pro'."""
+    s = str(value or "").strip()
+    if not s or s.lower() == "none":
+        return ""
+    m = re.search(r"\bi[3579][\s-]?\d{3,5}\w*", s, re.I)
+    if m:
+        return m.group(0).replace(" ", "-")
+    m = re.search(r"\bUltra\s*\d+[\s-]?\w*", s, re.I)
+    if m:
+        return " ".join(m.group(0).split())
+    m = re.search(r"\bRyzen\s*\d+\s*\w*", s, re.I)
+    if m:
+        return " ".join(m.group(0).split())
+    m = re.search(r"\bM[1-4](?:\s*(?:Pro|Max|Ultra))?\b", s)
+    if m:
+        return m.group(0)
+    # Fallback: strip the common noise tokens and clock speeds.
+    s = re.sub(r"\(R\)|\(TM\)|Intel|Core|\d+th\s*Gen|@.*|,.*|\d+(?:\.\d+)?\s*[GM]Hz.*"
+               r"|\d+\s*Cores.*|\d+\s*Logical.*", " ", s, flags=re.I)
+    return " ".join(s.split())[:24]
+
+
 def get_stock_by_os(data: dict) -> dict:
     """Group ready stock laptops by OS. Returns {os_label: [config dicts]},
     ordered by count descending. Each config dict has make/model/ram/processor
@@ -289,14 +351,17 @@ def get_stock_by_os(data: dict) -> dict:
     for row in data["in_stock"]:
         make = str(row.get("Laptop Make", "") or "").strip()
         model = str(row.get("Laptop Model", "") or "").strip()
-        ram = str(row.get("RAM", "") or "").strip()
-        proc = str(row.get("Processor", "") or "").strip()
+        ram = " ".join(str(row.get("RAM", "") or "").strip().split())
+        proc = _clean_processor(row.get("Processor"))
+        tag = str(row.get("Laptop Asset Tag", "") or "").strip()
         parts = [p for p in (f"{make} {model}".strip(), ram, proc)
                  if p and p.lower() not in ("none", "")]
+        config = " · ".join(parts)
+        if not config:
+            config = tag or "details not recorded"
         groups[_os_label(row.get("Operating System"))].append({
             "make": make, "model": model, "ram": ram, "processor": proc,
-            "tag": str(row.get("Laptop Asset Tag", "") or "").strip(),
-            "config": " · ".join(parts) or "—",
+            "tag": tag, "config": config,
         })
     return dict(sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True))
 
@@ -1684,13 +1749,12 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             lines.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
     blocks += _blk_named_section(f"*⏰ 4) Upcoming Joiners (30d) — {len(joiners)}*", lines, "—")
 
-    # 5) Spend — two-column card
-    blocks.append(_blk_divider())
-    blocks.append(_blk_section("*💰 5) Spend This Month*"))
-    blocks.append({"type": "section", "fields": [
-        {"type": "mrkdwn", "text": f"*Laptops*\n{fmt_usd(laptop_spend['total_spend'])}"},
-        {"type": "mrkdwn", "text": f"*Apps*\n{fmt_usd(app_total)}{_spend_asof_note(data)}"},
-    ]})
+    # 5) Spend
+    blocks += _blk_named_section(
+        "*💰 5) Spend This Month*",
+        [f"*Laptops* {fmt_usd(laptop_spend['total_spend'])}   ·   "
+         f"*Apps* {fmt_usd(app_total)}{_spend_asof_note(data)}"],
+        "—")
 
     # 6) Aging + action
     if not aging:
