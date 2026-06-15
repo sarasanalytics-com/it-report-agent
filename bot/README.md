@@ -91,5 +91,8 @@ Pick the smallest instance; the bot is idle until asked.
   and re-fetched on the next question after that.
 - **Cost.** Defaults to `claude-sonnet-4-6`; set `ANTHROPIC_MODEL=claude-haiku-4-5`
   for the cheapest/fastest option.
-- **Access.** Anyone who can DM or @mention the bot can see IT data — keep it to
-  the relevant channel/people. (A future enhancement can allowlist user IDs.)
+- **Access control.** Set `BOT_ALLOWED_USERS` to a comma-separated list of Slack
+  user IDs (e.g. the HR head + IT) — only they get answers; everyone else gets a
+  polite decline. Find an ID in Slack: click the person's name → **More** →
+  **Copy member ID** (looks like `U01ABCDEF`). If left empty the bot answers
+  anyone who can reach it (it logs a warning on startup).

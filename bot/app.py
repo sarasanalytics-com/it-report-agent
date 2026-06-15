@@ -51,6 +51,28 @@ def _clean(text: str | None) -> str:
     return _MENTION_RE.sub("", text or "").strip()
 
 
+def _load_allowlist() -> set[str]:
+    """Slack user IDs allowed to use the bot (from BOT_ALLOWED_USERS, comma or
+    semicolon separated). Empty set means the bot is open to everyone."""
+    raw = os.environ.get("BOT_ALLOWED_USERS", "")
+    return {u.strip().upper() for u in raw.replace(";", ",").split(",") if u.strip()}
+
+
+ALLOWED_USERS = _load_allowlist()
+
+DENY_MESSAGE = (
+    "Sorry, I can only share IT information with approved people. If you think "
+    "you should have access, please contact the IT team. :lock:"
+)
+
+
+def _authorized(event) -> bool:
+    """True when the allowlist is empty (open) or the sender is on it."""
+    if not ALLOWED_USERS:
+        return True
+    return (event.get("user") or "").upper() in ALLOWED_USERS
+
+
 def _reply(text: str | None, say, event) -> None:
     question = _clean(text)
     thread_ts = event.get("thread_ts") or event.get("ts")
@@ -70,9 +92,20 @@ def _reply(text: str | None, say, event) -> None:
     say(text=answer, thread_ts=thread_ts)
 
 
+def _guard(event, say) -> bool:
+    """Enforce the allowlist; reply with a polite decline if not authorized."""
+    if _authorized(event):
+        return True
+    log.info("Denied request from user %s (not on allowlist)", event.get("user"))
+    say(text=DENY_MESSAGE, thread_ts=event.get("thread_ts") or event.get("ts"))
+    return False
+
+
 @app.event("app_mention")
 def handle_mention(event, say):
     """Someone @mentioned the bot in a channel."""
+    if not _guard(event, say):
+        return
     _reply(event.get("text"), say, event)
 
 
@@ -83,6 +116,8 @@ def handle_message(event, say):
         return
     if event.get("bot_id") or event.get("subtype"):
         return
+    if not _guard(event, say):
+        return
     _reply(event.get("text"), say, event)
 
 
@@ -92,6 +127,11 @@ def main() -> None:
         refresh(force=True)
     except Exception:  # noqa: BLE001
         log.warning("Initial data warm-up failed; will retry on first question.")
+    if ALLOWED_USERS:
+        log.info("Access restricted to %d allowlisted user(s).", len(ALLOWED_USERS))
+    else:
+        log.warning("BOT_ALLOWED_USERS is empty — the bot will answer ANYONE who "
+                    "can DM or @mention it. Set BOT_ALLOWED_USERS to restrict access.")
     log.info("IT bot starting (Socket Mode) …")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
 
