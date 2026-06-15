@@ -116,8 +116,10 @@ def slack_upload_file(file_path: pathlib.Path, title: str, thread_ts: str) -> No
 
 def _read_and_trim(path: pathlib.Path) -> str:
     text = path.read_text(encoding="utf-8").strip()
-    if len(text) > 3900:
-        text = text[:3900] + "\n\n_… message truncated._"
+    # Slack's text field accepts up to 40k chars; keep a generous cap so the
+    # full multi-section report (incl. all open tickets) posts intact.
+    if len(text) > 11000:
+        text = text[:11000] + "\n\n_… message truncated._"
     return text
 
 

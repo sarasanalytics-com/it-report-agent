@@ -42,6 +42,15 @@ PROCUREMENT_FILE_PATH = os.environ.get(
 JOINERS_FILE_PATH = os.environ.get(
     "JOINERS_FILE_PATH", "Anudeep Excel sheets/New Joineings and checklist.xlsx"
 )
+# Vendor payments workbook — a SharePoint/OneDrive sharing URL works here.
+# Best-effort: a failure to download does not fail the run (the report then
+# shows "no vendor payments sheet connected"). Use `or` so a blank secret
+# falls back to the default share URL.
+VENDOR_FILE_PATH = os.environ.get("VENDOR_FILE_PATH") or (
+    "https://sarasanalytics0-my.sharepoint.com/:x:/g/personal/"
+    "anudeep_kolla_sarasanalytics_com/"
+    "IQDQYmpYThX_TqjxmCahWDEWAVPwYQoCmoYrI93oeGnzsLQ?e=NuL9Qc"
+)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
@@ -169,7 +178,15 @@ def main() -> None:
             print(f"  - {f}", file=sys.stderr)
         sys.exit(1)
 
-    print("All files downloaded successfully.")
+    print("All required files downloaded successfully.")
+
+    # Best-effort: vendor payments workbook (optional — never fail the run).
+    if VENDOR_FILE_PATH:
+        try:
+            download_file(token, drive_id, VENDOR_FILE_PATH, DATA_DIR / "vendor_payments.xlsx")
+        except requests.HTTPError as exc:
+            print(f"  ✗ Vendor payments file not downloaded ({exc}); report will show "
+                  f"'no vendor payments sheet connected'.", file=sys.stderr)
 
 
 if __name__ == "__main__":

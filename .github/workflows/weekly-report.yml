@@ -41,6 +41,7 @@ jobs:
           SPEND_FILE_PATH: ${{ secrets.SPEND_FILE_PATH }}
           PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
           JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
+          VENDOR_FILE_PATH: ${{ secrets.VENDOR_FILE_PATH }}
 
       # ── 1b. Fetch IT tickets from ClickUp (best-effort; placeholder if unset) ──
       - name: Fetch IT issues from ClickUp
@@ -62,25 +63,10 @@ jobs:
           # Leave the secret unset to use the built-in default (≈ ₹85.5/$).
           INR_TO_USD_RATE: ${{ secrets.INR_TO_USD_RATE }}
 
-      # ── 4a. Generate dashboard charts ──
-      - name: Generate charts
-        run: python scripts/generate-charts.py
-
-      # ── 4b. Convert full report to Word document ──
-      - name: Generate Word document
-        run: |
-          python scripts/generate-docx.py \
-            output/full-report.md \
-            "output/IT-Weekly-Report-$(date -u +%Y-%m-%d).docx"
-
-      # ── 5. Post summary + Word doc to Slack (skipped on dry runs) ──
+      # ── 4. Post the report summary to Slack (text only; skipped on dry runs) ──
       - name: Post to Slack
         if: ${{ inputs.dry_run != true }}
-        run: |
-          DOCX_FILE=$(ls output/*.docx 2>/dev/null | head -1)
-          python scripts/post-to-slack.py \
-            output/slack-summary.md \
-            ${DOCX_FILE:+"$DOCX_FILE"}
+        run: python scripts/post-to-slack.py output/slack-summary.md
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
