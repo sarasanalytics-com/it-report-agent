@@ -695,6 +695,15 @@ def _is_total_row(row: dict) -> bool:
     return app_name in TOTAL_ROW_KEYWORDS
 
 
+_warned_spend_keys: set = set()
+
+
+def _warn_spend_once(key: str, message: str) -> None:
+    if key not in _warned_spend_keys:
+        _warned_spend_keys.add(key)
+        print(f"  [spend] WARNING: {message}", file=sys.stderr)
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float]:
     """Get app spend for current month, upcoming renewals, hardware spend, and grand total.
 
@@ -730,15 +739,14 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float
             else:
                 app_total += val
 
-    # Only flag the problem cases to stderr so a run reveals why a month total
-    # is zero (missing column vs. empty data) without noise on healthy runs.
+    # Only flag the problem cases to stderr (once per month) so a run reveals
+    # why a month total is zero (missing column vs. empty data) without noise.
     if month_key is None:
-        print("  [spend] WARNING: no column matched the current month in the spend sheet",
-              file=sys.stderr)
+        _warn_spend_once("no-column", "no column matched the current month in the spend sheet")
     elif app_total == 0:
-        print(f"  [spend] WARNING: current-month column {month_key!r} found but app total is 0 "
-              f"({numeric_cells} numeric cell(s)) — check the spend sheet for that month",
-              file=sys.stderr)
+        _warn_spend_once(str(month_key),
+                         f"current-month column {month_key!r} found but app total is 0 "
+                         f"({numeric_cells} numeric cell(s)) — that month has no spend data entered yet")
 
     # Upcoming renewals (app only)
     renewals = []
