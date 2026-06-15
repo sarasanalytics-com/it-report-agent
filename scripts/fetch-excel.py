@@ -26,7 +26,8 @@ import requests
 TENANT_ID = os.environ["AZURE_TENANT_ID"]
 CLIENT_ID = os.environ["AZURE_CLIENT_ID"]
 CLIENT_SECRET = os.environ["AZURE_CLIENT_SECRET"]
-SITE_ID = os.environ["SHAREPOINT_SITE_ID"]
+# Optional: only needed when downloading files by folder PATH (not share URL).
+SITE_ID = os.environ.get("SHAREPOINT_SITE_ID", "")
 DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID", "")
 
 # SharePoint paths – override via env vars to match your folder layout
@@ -76,14 +77,28 @@ def get_access_token() -> str:
 # Drive helpers
 # ---------------------------------------------------------------------------
 
+_DRIVE_ID_CACHE = ""
+
+
 def resolve_drive_id(token: str) -> str:
-    """Return the default document library drive ID for the site."""
+    """Return (and cache) the site's document-library drive ID. Only needed for
+    folder-path downloads; share-URL downloads resolve their own drive."""
+    global _DRIVE_ID_CACHE
     if DRIVE_ID:
         return DRIVE_ID
+    if _DRIVE_ID_CACHE:
+        return _DRIVE_ID_CACHE
+    if not SITE_ID:
+        raise RuntimeError(
+            "SHAREPOINT_SITE_ID (or SHAREPOINT_DRIVE_ID) is required to download "
+            "files by folder path. Either set it, or use full SharePoint/OneDrive "
+            "share links for the *_FILE_PATH values."
+        )
     url = f"{GRAPH_BASE}/sites/{SITE_ID}/drive"
     resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
     resp.raise_for_status()
-    return resp.json()["id"]
+    _DRIVE_ID_CACHE = resp.json()["id"]
+    return _DRIVE_ID_CACHE
 
 
 def _encode_share_url(url: str) -> str:
@@ -119,14 +134,15 @@ def download_via_share_url(token: str, share_url: str, dest: pathlib.Path) -> No
     print(f"  ✓ Downloaded (via share URL) → {dest.name} ({size_kb:.0f} KB)")
 
 
-def download_file(token: str, drive_id: str, file_path: str, dest: pathlib.Path) -> None:
+def download_file(token: str, file_path: str, dest: pathlib.Path) -> None:
     """Download a file from SharePoint. Supports both folder paths and sharing URLs."""
-    # If the path is a sharing URL, resolve via /shares endpoint
+    # If the path is a sharing URL, resolve via /shares endpoint (no SITE_ID needed)
     if file_path.startswith("http://") or file_path.startswith("https://"):
         download_via_share_url(token, file_path, dest)
         return
 
-    # Otherwise treat as a path inside the site drive
+    # Otherwise treat as a path inside the site drive (needs the drive id)
+    drive_id = resolve_drive_id(token)
     parts = file_path.split("/")
     encoded_parts = [urllib.parse.quote(p) for p in parts]
     encoded = "/".join(encoded_parts)
@@ -152,7 +168,6 @@ def download_file(token: str, drive_id: str, file_path: str, dest: pathlib.Path)
 def main() -> None:
     print("Authenticating with Microsoft Graph …")
     token = get_access_token()
-    drive_id = resolve_drive_id(token)
 
     files_to_fetch = [
         (ASSET_FILE_PATH, DATA_DIR / "asset_inventory.xlsx"),
@@ -165,7 +180,7 @@ def main() -> None:
     failures = []
     for sp_path, local_path in files_to_fetch:
         try:
-            download_file(token, drive_id, sp_path, local_path)
+            download_file(token, sp_path, local_path)
         except requests.HTTPError as exc:
             # Redact tokens but show path (last segment only) so we know which file failed
             filename = sp_path.rsplit("/", 1)[-1]
@@ -183,7 +198,7 @@ def main() -> None:
     # Best-effort: vendor payments workbook (optional — never fail the run).
     if VENDOR_FILE_PATH:
         try:
-            download_file(token, drive_id, VENDOR_FILE_PATH, DATA_DIR / "vendor_payments.xlsx")
+            download_file(token, VENDOR_FILE_PATH, DATA_DIR / "vendor_payments.xlsx")
         except requests.HTTPError as exc:
             print(f"  ✗ Vendor payments file not downloaded ({exc}); report will show "
                   f"'no vendor payments sheet connected'.", file=sys.stderr)
