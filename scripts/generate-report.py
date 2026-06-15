@@ -1533,8 +1533,9 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
     else:
         for i in open_issues:
             owner = i["owner"] or "unassigned"
+            requester = i["raised_by"] or "unknown"
             L.append(f"› *{_truncate(i['issue'], 55)}* — _{_truncate(i['remark'], 90)}_ "
-                     f"({i['status'] or 'Open'} · {owner})")
+                     f"({i['status'] or 'Open'} · raised by {requester} · owner {owner})")
 
     # 2) Laptop stock ready — by OS, with configurations
     L.append(f"\n*2) 💻 Laptop Stock Ready — {stock_ready}*")
@@ -1813,7 +1814,8 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         lines = ["None open ✅"]
     else:
         lines = [f"› *{_truncate(i['issue'], 55)}* — _{_truncate(i['remark'], 90)}_  "
-                 f"`{i['status'] or 'Open'}` · {i['owner'] or 'unassigned'}" for i in open_issues]
+                 f"`{i['status'] or 'Open'}` · raised by {i['raised_by'] or 'unknown'} "
+                 f"· owner {i['owner'] or 'unassigned'}" for i in open_issues]
     blocks += _blk_named_section(f"*🐞 1) Open IT Tickets — {len(open_issues)}*", lines, "—")
 
     # 2) Stock ready by OS + configs
