@@ -15,6 +15,8 @@ This repo generates automated weekly and monthly IT asset & spend reports for Sa
 - `output/` — generated reports (gitignored, populated at runtime)
 - `prompts/` — Claude prompt templates for weekly and monthly reports
 - `scripts/` — Python helper scripts (fetch, validate, post, create doc)
+- `bot/` — always-on Slack Q&A bot ("IT Helper") that answers the HR head's
+  plain-language questions from live data via Claude (see `bot/README.md`)
 
 ## Report Types
 
