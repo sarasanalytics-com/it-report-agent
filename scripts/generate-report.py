@@ -132,6 +132,31 @@ def fmt_usd_from_inr(amount) -> str:
     return fmt_usd(inr_to_usd(amount))
 
 
+def _to_number(val) -> Optional[float]:
+    """Parse a spreadsheet cell into a float, tolerating numbers stored as text
+    with currency symbols / thousands separators (e.g. "$1,234.50", "1,234").
+    Returns None when the value isn't numeric."""
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        s = val.strip()
+        for token in ("$", "₹", "USD", "INR", "Rs.", "Rs", ","):
+            s = s.replace(token, "")
+        s = s.strip()
+        if not s:
+            return None
+        # Handle parenthesised negatives e.g. (1,234)
+        if s.startswith("(") and s.endswith(")"):
+            s = "-" + s[1:-1]
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
+
+
 def read_sheet(wb, sheet_name: str, header_row: int = 1) -> list[dict]:
     """Read a sheet into a list of dicts. Returns [] if sheet missing."""
     if sheet_name not in wb.sheetnames:
@@ -596,10 +621,8 @@ def get_laptop_spend(data: dict) -> dict:
             key_lower = str(key).strip().lower()
             for abbr in abbrevs:
                 if abbr in key_lower and "joiner" in key_lower:
-                    try:
-                        joiners = int(val) if val not in (None, "") else 0
-                    except (TypeError, ValueError):
-                        joiners = 0
+                    num = _to_number(val)
+                    joiners = int(num) if num is not None else 0
 
         if joiners:
             result["models"].append({
@@ -615,10 +638,8 @@ def get_laptop_spend(data: dict) -> dict:
             key_lower = str(key).strip().lower()
             for abbr in abbrevs:
                 if abbr in key_lower and "spend" in key_lower:
-                    try:
-                        result["total_spend"] = inr_to_usd(val) if val not in (None, "") else 0.0
-                    except (TypeError, ValueError):
-                        result["total_spend"] = 0.0
+                    num = _to_number(val)
+                    result["total_spend"] = inr_to_usd(num) if num is not None else 0.0
 
     return result
 
@@ -695,17 +716,29 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float
 
     app_total = 0.0
     hw_total = 0.0
+    numeric_cells = 0
     if month_key:
         for row in data["spend"]:
             if _is_total_row(row):
                 continue
-            val = row.get(month_key)
-            if not (val and isinstance(val, (int, float))):
+            val = _to_number(row.get(month_key))
+            if val is None:
                 continue
+            numeric_cells += 1
             if _is_hardware_row(row):
-                hw_total += float(val)
+                hw_total += val
             else:
-                app_total += float(val)
+                app_total += val
+
+    # Only flag the problem cases to stderr so a run reveals why a month total
+    # is zero (missing column vs. empty data) without noise on healthy runs.
+    if month_key is None:
+        print("  [spend] WARNING: no column matched the current month in the spend sheet",
+              file=sys.stderr)
+    elif app_total == 0:
+        print(f"  [spend] WARNING: current-month column {month_key!r} found but app total is 0 "
+              f"({numeric_cells} numeric cell(s)) — check the spend sheet for that month",
+              file=sys.stderr)
 
     # Upcoming renewals (app only)
     renewals = []
@@ -754,15 +787,15 @@ def get_app_spend_detail(data: dict) -> dict:
             continue
         app = str(row.get("APPLICATION / SW / LICENSE", "")).strip()
         dept = str(row.get("Department", "")).strip() or "Unassigned"
-        tv = row.get(this_key) if this_key else None
-        pv = row.get(prev_key) if prev_key else None
-        if isinstance(tv, (int, float)):
-            this_total += float(tv)
+        tv = _to_number(row.get(this_key)) if this_key else None
+        pv = _to_number(row.get(prev_key)) if prev_key else None
+        if tv is not None:
+            this_total += tv
             if app:
-                per_app.append({"app": app, "dept": dept, "amount": float(tv)})
-                by_dept[dept] += float(tv)
-        if isinstance(pv, (int, float)):
-            last_total += float(pv)
+                per_app.append({"app": app, "dept": dept, "amount": tv})
+                by_dept[dept] += tv
+        if pv is not None:
+            last_total += pv
 
     per_app.sort(key=lambda x: x["amount"], reverse=True)
     return {
@@ -1126,6 +1159,29 @@ def _overall_status(hc: dict) -> str:
     return "🟢 On Track"
 
 
+def _short_model(make, model) -> str:
+    """Tidy a make/model for one-line display (drop the trailing 'Laptop')."""
+    name = f"{make} {model}".strip()
+    if name.lower().endswith(" laptop"):
+        name = name[:-len(" laptop")]
+    return name
+
+
+def _aging_slack_line(a: dict) -> str:
+    """One clean aging line: name — model · age, with a warranty note only when
+    it's actually actionable (expired)."""
+    note = ""
+    we = a.get("warranty_end")
+    if we and we < TODAY:
+        note = f" · _warranty expired {we.strftime('%b %Y')}_"
+    return f"{a['employee']} — {_short_model(a['make'], a['model'])} · {a['age_years']}yr{note}"
+
+
+def _truncate(text: str, n: int = 80) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
 def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     """Concise at-a-glance dashboard for the IT head. Full breakdown in the Word doc."""
     hc = get_health_check(data, prev_snap)
@@ -1135,58 +1191,55 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     laptop_spend = get_laptop_spend(data)
     app_total, renewals, _, _ = get_current_month_spend(data)
     joiners_7 = get_joiners_with_laptop_needs(data, 7)
+    joiners_30 = get_upcoming_joiners(data, 30)
     issues = get_it_issues(data)
+    open_issues = [i for i in issues["issues"] if i["is_open"]]
     stock_ready = hc["_stock_ready"]
 
-    lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %b %Y')}*"]
+    lines = [f"*📊 IT Weekly Report — {TODAY.strftime('%d %b %Y')}*  ·  {_overall_status(hc)}"]
+    lines.append(f"_Stock {hc['stock']}  Aging {hc['aging']}  Joiners {hc['joiner_prep']}  Spend {hc['spend']}_")
 
-    # ── At a glance ──
-    lines.append(f"*{_overall_status(hc)}*  ·  Stock {hc['stock']} · Aging {hc['aging']} · "
-                 f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}")
+    # ── Action Items (priority dots are meaningful, keep them) ──
+    lines.append("\n*🎯 Action Items*")
+    for a in actions[:4]:
+        lines.append(f"{a['priority']}  {a['text']}")
 
-    # ── 1. Action Items for IT Manager (most important — top of the post) ──
-    lines.append(f"\n*🎯 Action Items*")
-    for a in actions[:5]:
-        lines.append(f"{a['priority']} {a['text']}")
-
-    # ── 2. Stock Ready ──
-    lines.append(f"\n*📦 Stock Ready*")
+    # ── Stock & Joiners (one compact block) ──
     prev_ready = (prev_snap or {}).get("stock_ready")
     delta = f" ({_fmt_delta(stock_ready, prev_ready)})" if prev_ready is not None else ""
-    lines.append(f"• Laptops ready: *{stock_ready}*{delta} · backup (3yr+): {len(data['backup'])}")
+    lines.append("\n*📦 Stock & Joiners*")
+    lines.append(f"Ready *{stock_ready}*{delta} · Backup *{len(data['backup'])}* · "
+                 f"Joiners 7d *{len(joiners_7)}* / 30d *{len(joiners_30)}*")
+    for j in joiners_7[:4]:
+        days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
+        cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
+        lines.append(f"› {j['name']} — {j['department']} ({days}){cfg}")
 
-    # ── 3. Joiners Next Week ──
-    lines.append(f"\n*⏰ Joiners Next Week ({len(joiners_7)})*")
-    if joiners_7:
-        for j in joiners_7[:5]:
-            cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
-            days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
-            lines.append(f"• {j['name']} — {j['department']} (DOJ {j['doj'].strftime('%d %b')}, {days}){cfg}")
-        if len(joiners_7) > 5:
-            lines.append(f"  _…and {len(joiners_7)-5} more_")
-    else:
-        lines.append("• None in the next 7 days ✅")
+    # ── Laptop Aging (numbered, no repetitive 'replace now' noise) ──
+    lines.append(f"\n*⏳ Laptop Aging* — {len(aging)} over 3.5yr · *{len(critical_aging)}* critical")
+    for n, a in enumerate(critical_aging[:3], 1):
+        lines.append(f"{n}. {_aging_slack_line(a)}")
+    if len(critical_aging) > 3:
+        lines.append(f"_+{len(critical_aging) - 3} more critical — see full report_")
 
-    # ── 4. Laptop Aging (with remarks) ──
-    lines.append(f"\n*⏳ Laptop Aging* — {len(aging)} over 3.5yr ({len(critical_aging)} critical)")
-    for a in critical_aging[:3]:
-        lines.append(f"• {a['employee']} — {a['make']} {a['model']} ({a['age_years']}yr) · _{a['remark']}_")
-
-    # ── 5. IT Issues & Status ──
-    lines.append(f"\n*🐞 IT Issues & Status*")
+    # ── IT Issues (show the actual open tickets + why pending) ──
     if issues["connected"]:
-        lines.append(f"• Open: *{issues['open']}* ({issues['high_open']} high-priority) · Resolved: {issues['resolved']}")
+        lines.append(f"\n*🐞 IT Issues* — *{issues['open']}* open · {issues['resolved']} resolved")
+        for i in open_issues[:4]:
+            lines.append(f"› {_truncate(i['issue'], 45)} — _{_truncate(i['remark'], 70)}_")
+        if len(open_issues) > 4:
+            lines.append(f"_+{len(open_issues) - 4} more open — see full report_")
     else:
-        lines.append("• _No issue source connected yet — ticketing/email/Slack integration pending_")
+        lines.append("\n*🐞 IT Issues* — _no source connected_")
 
-    # ── 6. Spend Snapshot ──
-    lines.append(f"\n*💰 Spend MTD*")
-    lines.append(f"• App/subscriptions: *{fmt_usd(app_total)}* · Laptops: *{fmt_usd(laptop_spend['total_spend'])}*")
+    # ── Spend MTD ──
+    lines.append("\n*💰 Spend MTD*")
+    lines.append(f"Apps *{fmt_usd(app_total)}* · Laptops *{fmt_usd(laptop_spend['total_spend'])}*")
     if renewals:
-        lines.append(f"• 🔔 {len(renewals)} renewal(s) in next 30d: " +
+        lines.append(f"🔔 {len(renewals)} renewal(s) in 30d: " +
                      ", ".join(r['app'] for r in renewals[:3]) + ("…" if len(renewals) > 3 else ""))
 
-    lines.append(f"\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
+    lines.append("\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
     return "\n".join(lines)
 
 
@@ -1481,57 +1534,59 @@ def generate_monthly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     joiners_30 = get_joiners_with_laptop_needs(data, 30)
     joiners_7 = get_joiners_with_laptop_needs(data, 7)
     joiners_90 = get_upcoming_joiners(data, 90)
+    open_issues = [i for i in issues["issues"] if i["is_open"]]
 
-    lines = [f"*📊 IT Monthly Report — {TODAY.strftime('%B %Y')}*"]
+    lines = [f"*📊 IT Monthly Report — {TODAY.strftime('%B %Y')}*  ·  {_overall_status(hc)}"]
+    lines.append(f"_Stock {hc['stock']}  Aging {hc['aging']}  Joiners {hc['joiner_prep']}  Spend {hc['spend']}_")
 
-    # ── At a glance ──
-    lines.append(f"*{_overall_status(hc)}*  ·  Stock {hc['stock']} · Aging {hc['aging']} · "
-                 f"Joiner Prep {hc['joiner_prep']} · Spend {hc['spend']}")
+    # ── Action Items ──
+    lines.append("\n*🎯 Action Items*")
+    for a in actions[:4]:
+        lines.append(f"{a['priority']}  {a['text']}")
 
-    # ── 1. Action Items ──
-    lines.append(f"\n*🎯 Action Items*")
-    for a in actions[:5]:
-        lines.append(f"{a['priority']} {a['text']}")
+    # ── Monthly Highlights ──
+    lines.append("\n*📈 Highlights*")
+    lines.append(f"Fleet *{total_laptops}* (Assigned {total_assigned} · Ready {len(data['in_stock'])} · Backup {len(data['backup'])})")
+    lines.append(f"Assignments this month *{len(assignments_month)}* ({len(replacements)} replacements) · "
+                 f"Joiners 30d *{len(joiners_30)}* / 90d {len(joiners_90)}")
 
-    # ── 2. Monthly Highlights ──
-    lines.append(f"\n*📈 Monthly Highlights*")
-    lines.append(f"• Fleet: *{total_laptops}* (Assigned {total_assigned} · Ready {len(data['in_stock'])} · Backup {len(data['backup'])})")
-    lines.append(f"• Assignments this month: *{len(assignments_month)}* ({len(replacements)} replacements)")
-    lines.append(f"• Aging >3.5yr: *{len(aging)}* ({hc['_critical_aging']} critical)")
+    # ── Laptop Aging ──
+    lines.append(f"\n*⏳ Laptop Aging* — {len(aging)} over 3.5yr · *{hc['_critical_aging']}* critical")
+    for n, a in enumerate(critical_aging[:3], 1):
+        lines.append(f"{n}. {_aging_slack_line(a)}")
+    if len(critical_aging) > 3:
+        lines.append(f"_+{len(critical_aging) - 3} more critical — see full report_")
 
-    # ── 3. Stock Ready ──
-    lines.append(f"\n*📦 Stock Ready*: *{len(data['in_stock'])}* laptops + {len(data['backup'])} backup (3yr+)")
-
-    # ── 4. Joiners ──
-    lines.append(f"\n*⏰ Joiners*: next 7d *{len(joiners_7)}* · next 30d *{len(joiners_30)}* · 90d forecast {len(joiners_90)}")
-
-    # ── 5. IT Issues & Status ──
+    # ── IT Issues (actual open tickets + why pending) ──
     if issues["connected"]:
-        lines.append(f"\n*🐞 IT Issues*: Open *{issues['open']}* ({issues['high_open']} high) · Resolved {issues['resolved']}")
+        lines.append(f"\n*🐞 IT Issues* — *{issues['open']}* open · {issues['resolved']} resolved")
+        for i in open_issues[:4]:
+            lines.append(f"› {_truncate(i['issue'], 45)} — _{_truncate(i['remark'], 70)}_")
+        if len(open_issues) > 4:
+            lines.append(f"_+{len(open_issues) - 4} more open — see full report_")
     else:
-        lines.append(f"\n*🐞 IT Issues*: _no source connected yet (integration pending)_")
+        lines.append("\n*🐞 IT Issues* — _no source connected_")
 
-    # ── 6. Monthly Spend ──
+    # ── Monthly Spend ──
     mom = _fmt_delta(app_detail["this_month"], app_detail["last_month"], as_int=False) if app_detail["last_month"] else "—"
-    lines.append(f"\n*💰 Monthly Spend*")
-    lines.append(f"• App/subscriptions: *{fmt_usd(app_total)}* (vs last month {fmt_usd(app_detail['last_month'])}, Δ {mom})")
-    lines.append(f"• Laptops: *{fmt_usd(laptop_spend['total_spend'])}*" +
+    lines.append("\n*💰 Monthly Spend*")
+    lines.append(f"Apps *{fmt_usd(app_total)}* (vs last mo {fmt_usd(app_detail['last_month'])}, Δ {mom}) · "
+                 f"Laptops *{fmt_usd(laptop_spend['total_spend'])}*" +
                  (f" ({pace['pct_used']:.0f}% of budget)" if pace['pct_used'] is not None else ""))
 
-    # ── 7. Procurement Recommendation ──
+    # ── Procurement Recommendation ──
     need = len(joiners_30) + hc["_critical_aging"] - hc["_stock_ready"]
-    lines.append(f"\n*🛒 Procurement Recommendation*")
     if need > 0:
-        lines.append(f"⚠️ *Order {need} laptops*: {len(joiners_30)} joiners + {hc['_critical_aging']} critical replacements vs {hc['_stock_ready']} in stock")
+        lines.append(f"\n*🛒 Procurement* — ⚠️ order *{need}* laptops "
+                     f"({len(joiners_30)} joiners + {hc['_critical_aging']} critical vs {hc['_stock_ready']} in stock)")
     else:
-        lines.append(f"✅ Stock sufficient: {hc['_stock_ready']} for {len(joiners_30)} joiners + {hc['_critical_aging']} replacements")
+        lines.append(f"\n*🛒 Procurement* — ✅ stock covers {len(joiners_30)} joiners + {hc['_critical_aging']} replacements")
 
-    # ── 8. Renewals ──
     if renewals:
-        lines.append(f"\n*🔔 Renewals next 30d* ({len(renewals)}): " +
+        lines.append(f"🔔 {len(renewals)} renewal(s) in 30d: " +
                      ", ".join(r['app'] for r in renewals[:5]) + ("…" if len(renewals) > 5 else ""))
 
-    lines.append(f"\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
+    lines.append("\n_Full breakdown in the attached Word doc. React 👍/👎 or reply with feedback._")
     return "\n".join(lines)
 
 
