@@ -76,6 +76,9 @@ against spare stock.
 LAPTOP RETURNS / OFFBOARDING.
 - For her team's requests ("any IT tickets for X?", "how long pending?"), use \
 IT TICKETS — match the person in 'Raised by', and quote the days open.
+- For software/subscriptions ("what apps do we pay for?", "what renews next \
+month?", "are we within budget?"), use SOFTWARE & LICENSES and IT BUDGET vs \
+ACTUAL — list renewals due and the relevant figures.
 - For money, keep the currency symbols exactly as in the data (vendor bills are \
 in ₹, laptop costs in $) and don't convert them yourself.
 

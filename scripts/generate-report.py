@@ -944,16 +944,46 @@ def _bot_tickets_section(data: dict) -> str:
     return "\n".join(L)
 
 
+def _bot_software_section(data: dict) -> str:
+    """Software/licence inventory + upcoming renewals + budget vs actual."""
+    inv = get_software_inventory(data)
+    renewals = get_upcoming_renewals(data, 60)
+    bva = get_budget_vs_actual(data)
+    L = [f"# SOFTWARE & LICENSES ({len(inv)} subscriptions)",
+         "Apps/subscriptions, monthly cost, owner, and renewal date.\n",
+         "| Application | Cost (this month) | Frequency | Owner/Dept | Renews |",
+         "|---|---|---|---|---|"]
+    for i in inv:
+        L.append(f"| {i['app']} | {fmt_usd(i['cost']) if i['cost'] is not None else '—'} "
+                 f"| {i['frequency'] or '—'} | {i['dept'] or '—'} "
+                 f"| {i['renewal'].strftime('%d %b %Y') if i['renewal'] else '—'} |")
+    L.append(f"\n## RENEWALS DUE — next 60 days ({len(renewals)})")
+    for r in renewals:
+        L.append(f"- {r['renewal'].strftime('%d %b %Y')}: {r['app']} "
+                 f"({fmt_usd(r['cost']) if r['cost'] is not None else '—'})")
+    if not renewals:
+        L.append("- None.")
+    L.append("\n## IT BUDGET vs ACTUAL")
+    L.append(f"- Laptop procurement annual budget: {fmt_usd(bva['laptop_annual_budget'])} "
+             f"(≈ {fmt_usd(bva['laptop_monthly_budget'])}/month)")
+    pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of this month's budget"
+           if bva['laptop_pct_of_monthly'] is not None else "")
+    L.append(f"- Laptop spend this month: {fmt_usd(bva['laptop_actual_this_month'])}{pct}")
+    L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
+    return "\n".join(L)
+
+
 def build_bot_context(data: dict) -> str:
     """Full context for the IT Helper bot — everything an HR head asks about,
     beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
-    returns/offboarding, peripherals, and open tickets with requester/age."""
+    returns/offboarding, peripherals, open tickets, software & budget."""
     return "\n\n".join([
         build_employee_directory(data),
         _bot_joiners_section(data),
         _bot_returns_section(data),
         _bot_peripherals_section(data),
         _bot_tickets_section(data),
+        _bot_software_section(data),
     ])
 
 
@@ -1165,6 +1195,49 @@ def get_software_spend_this_month(data: dict) -> float:
                 line_items += 1
     _spend_diagnostic_once(data, month_key, is_current, total, line_items)
     return total
+
+
+def get_software_inventory(data: dict) -> list[dict]:
+    """Per-app/subscription line items for the reporting month, with renewal
+    dates — the software & licence inventory."""
+    month_key, _d, _ = _spend_period(data)
+    items = []
+    for row in data["spend"]:
+        name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
+        if not name or _is_total_row(row):
+            continue
+        items.append({
+            "app": name,
+            "frequency": str(row.get("FREQUENCY", "") or "").strip(),
+            "payment": str(row.get("Payment Method", "") or "").strip(),
+            "dept": str(row.get("Department", "") or "").strip(),
+            "cost": _to_number(row.get(month_key)) if month_key else None,
+            "renewal": parse_date(row.get("Renewal data") or row.get("Renewal Date")),
+        })
+    items.sort(key=lambda x: (x["cost"] is None, -(x["cost"] or 0)))
+    return items
+
+
+def get_upcoming_renewals(data: dict, days: int = 60) -> list[dict]:
+    """Subscriptions whose renewal date falls within the next `days`."""
+    cutoff = TODAY + timedelta(days=days)
+    ren = [i for i in get_software_inventory(data)
+           if i["renewal"] and TODAY <= i["renewal"] <= cutoff]
+    ren.sort(key=lambda x: x["renewal"])
+    return ren
+
+
+def get_budget_vs_actual(data: dict) -> dict:
+    """IT budget vs actual: laptop procurement (annual plan vs spend) plus the
+    current month's software/license spend."""
+    pace = get_spend_pace(data)
+    return {
+        "laptop_annual_budget": pace["annual_planned"],
+        "laptop_monthly_budget": pace["monthly_planned"],
+        "laptop_actual_this_month": pace["actual"],
+        "laptop_pct_of_monthly": pace["pct_used"],
+        "software_this_month": get_software_spend_this_month(data),
+    }
 
 
 def _spend_diagnostic_once(data, month_key, is_current, software_total, line_items) -> None:
@@ -1910,6 +1983,39 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
             due = v["due"].strftime('%d %b %Y') if v["due"] else "—"
             L.append(f"| {v['vendor']} | {v['invoice'] or '—'} | {fmt_inr_full(v['amount_inr'])} "
                      f"| {due} | {v['overdue'] or '—'} | {v['status'] or '—'} |")
+
+    # 8. Software & licenses inventory + renewals
+    inv = get_software_inventory(data)
+    renewals = get_upcoming_renewals(data, 60)
+    L.append(f"\n## 8. Software & Licenses — {len(inv)} subscriptions\n")
+    if not inv:
+        L.append("_No software/subscription rows found._")
+    else:
+        L.append("| Application / Licence | Cost (this month) | Frequency | Owner/Dept | Renews |")
+        L.append("|---|---|---|---|---|")
+        for i in inv:
+            L.append(f"| {i['app']} | {fmt_usd(i['cost']) if i['cost'] is not None else '—'} "
+                     f"| {i['frequency'] or '—'} | {i['dept'] or '—'} "
+                     f"| {i['renewal'].strftime('%d %b %Y') if i['renewal'] else '—'} |")
+        L.append(f"\n**Renewals due in the next 60 days — {len(renewals)}**")
+        if renewals:
+            for r in renewals:
+                L.append(f"- {r['renewal'].strftime('%d %b %Y')}: *{r['app']}* "
+                         f"({fmt_usd(r['cost']) if r['cost'] is not None else '—'})")
+        else:
+            L.append("- None.")
+
+    # 9. IT budget vs actual
+    bva = get_budget_vs_actual(data)
+    L.append("\n## 9. IT Budget vs Actual\n")
+    L.append("| Item | Amount |")
+    L.append("|---|---|")
+    L.append(f"| Laptop procurement — annual budget | {fmt_usd(bva['laptop_annual_budget'])} |")
+    L.append(f"| Laptop procurement — monthly budget | {fmt_usd(bva['laptop_monthly_budget'])} |")
+    L.append(f"| Laptop spend — this month | {fmt_usd(bva['laptop_actual_this_month'])}"
+             + (f" ({bva['laptop_pct_of_monthly']:.0f}% of monthly budget)"
+                if bva['laptop_pct_of_monthly'] is not None else "") + " |")
+    L.append(f"| Software & licenses — this month | {fmt_usd(bva['software_this_month'])} |")
 
     L.append(f"\n---\n{_fx_footnote()}")
     L.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
