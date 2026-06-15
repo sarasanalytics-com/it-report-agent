@@ -233,6 +233,15 @@ def load_data() -> dict:
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
 
+    # Surface any 'ready stock' row with no make/model so the mystery
+    # 'Unspecified — details not recorded' entries can be identified/cleaned.
+    for row in data["in_stock"]:
+        if not str(row.get("Laptop Make", "") or "").strip() and \
+           not str(row.get("Laptop Model", "") or "").strip():
+            populated = {k: v for k, v in row.items() if v not in (None, "")}
+            print(f"  Note: in-stock laptop with no make/model → {populated or '(entirely blank row)'}",
+                  file=sys.stderr)
+
     return data
 
 
@@ -366,14 +375,19 @@ def get_stock_by_os(data: dict) -> dict:
         ram = " ".join(str(row.get("RAM", "") or "").strip().split())
         proc = _clean_processor(row.get("Processor"))
         tag = str(row.get("Laptop Asset Tag", "") or "").strip()
+        serial = str(row.get("Laptop Serial Number", "")
+                     or row.get("Serial Number", "") or row.get("Serial No", "")
+                     or "").strip()
         parts = [p for p in (f"{make} {model}".strip(), ram, proc)
                  if p and p.lower() not in ("none", "")]
         config = " · ".join(parts)
         if not config:
-            config = tag or "details not recorded"
+            # No specs — surface whatever identifies the unit so it isn't a
+            # nameless "details not recorded" row.
+            config = tag or (f"S/N {serial}" if serial else "") or "details not recorded"
         groups[_os_label(row.get("Operating System"))].append({
             "make": make, "model": model, "ram": ram, "processor": proc,
-            "tag": tag, "config": config,
+            "tag": tag, "serial": serial, "config": config,
         })
     return dict(sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True))
 
