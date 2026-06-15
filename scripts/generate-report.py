@@ -828,6 +828,135 @@ def build_employee_directory(data: dict) -> str:
     return "\n".join(L)
 
 
+def _bot_joiners_section(data: dict) -> str:
+    """Upcoming joiners (next 30 days) with laptop needed + onboarding checklist."""
+    joiners = get_joiners_with_laptop_needs(data, 30)
+
+    def _norm(s):
+        return str(s or "").strip().lower()
+
+    by_name = {}
+    for row in data.get("checklist", []):
+        name = row.get("Name ", row.get("Name", ""))
+        if name:
+            by_name[_norm(name)] = row
+
+    L = [f"# UPCOMING JOINERS — next 30 days ({len(joiners)})",
+         "Joining date, role, laptop needed, and onboarding-checklist status per joiner. "
+         "Compare laptop needs against spare stock to judge readiness.\n"]
+    if not joiners:
+        L.append("None joining in the next 30 days.")
+        return "\n".join(L)
+    for j in joiners:
+        row = by_name.get(_norm(j["name"]))
+        if not row:
+            status = "onboarding checklist not found"
+        else:
+            done, pending = [], []
+            for col in ONBOARDING_CHECKLIST_COLS:
+                v = row.get(col)
+                if v is None:
+                    continue
+                (done if str(v).strip().lower() not in ("", "none", "no", "pending", "0")
+                 else pending).append(col)
+            total = len(done) + len(pending)
+            status = (f"{len(done)}/{total} checklist done"
+                      + (f"; pending: {', '.join(pending)}" if pending else "; all done"))
+        L.append(f"- *{j['name']}* — {j['department'] or '—'}, {j['designation'] or '—'} · "
+                 f"DOJ {j['doj'].strftime('%d %b %Y')} (in {j['days_until']}d) · "
+                 f"laptop needed: {j['laptop_config'] or 'standard'} · onboarding: {status}")
+    return "\n".join(L)
+
+
+def _bot_returns_section(data: dict) -> str:
+    """Laptop returns / offboarding — who handed a laptop back and when."""
+    items = []
+    for row in data.get("returned", []):
+        emp = (row.get("Employee Name") or row.get("Employee name")
+               or row.get("Name") or row.get("Name ") or "")
+        make = str(row.get("Laptop Make", "") or "").strip()
+        model = str(row.get("Laptop Model", "") or "").strip()
+        sn = (row.get("Laptop Serial Number") or row.get("Laptop Asset Tag") or "")
+        items.append((str(emp).strip(), f"{make} {model}".strip(),
+                      parse_date(row.get("Returned Date")), str(sn).strip()))
+    items.sort(key=lambda x: x[2] or dt.date.min, reverse=True)
+    L = [f"# LAPTOP RETURNS / OFFBOARDING ({len(items)} on record)",
+         "Laptops handed back (e.g. when someone leaves). Most recent first.\n",
+         "| Employee | Laptop | Returned on | Serial/Tag |", "|---|---|---|---|"]
+    for emp, laptop, d, sn in items[:100]:
+        L.append(f"| {emp or '—'} | {laptop or '—'} "
+                 f"| {d.strftime('%d %b %Y') if d else '—'} | {sn or '—'} |")
+    return "\n".join(L)
+
+
+_BOT_PERIPHERALS = [("mouse", "Mouse"), ("headset", "Headset"), ("keyboard", "Keyboard"),
+                    ("charger", "Charger"), ("docking", "Docking station"), ("monitor", "Monitor")]
+
+
+def _row_employee(row: dict) -> str:
+    for k, v in row.items():
+        kl = str(k).strip().lower()
+        if (("employee" in kl or kl.startswith("name") or "user" in kl or "assigned to" in kl)
+                and str(v or "").strip()):
+            return str(v).strip()
+    return ""
+
+
+def _row_detail(row: dict) -> str:
+    parts = []
+    for k, v in row.items():
+        kl = str(k).strip().lower()
+        if any(t in kl for t in ("make", "model", "brand", "type", "size")) and str(v or "").strip():
+            parts.append(str(v).strip())
+    return " ".join(parts[:2])
+
+
+def _bot_peripherals_section(data: dict) -> str:
+    """Per-person accessories (monitor, headset, keyboard, mouse, docking, charger)."""
+    by_person = defaultdict(list)
+    for key, label in _BOT_PERIPHERALS:
+        for row in data.get(key, []):
+            emp = _row_employee(row)
+            if not emp:
+                continue
+            detail = _row_detail(row)
+            by_person[emp].append(f"{label}{f' ({detail})' if detail else ''}")
+    L = [f"# PERIPHERALS BY PERSON ({len(by_person)} people with accessories on record)",
+         "Who holds which accessories. Use for 'does X have a monitor/headset?'.\n",
+         "| Employee | Accessories |", "|---|---|"]
+    for emp in sorted(by_person, key=str.lower):
+        L.append(f"| {emp} | {', '.join(by_person[emp])} |")
+    return "\n".join(L)
+
+
+def _bot_tickets_section(data: dict) -> str:
+    """Open IT tickets with requester + days open (for 'any tickets for X?')."""
+    issues = get_it_issues(data)
+    open_issues = [i for i in issues["issues"] if i["is_open"]]
+    L = [f"# IT TICKETS — open ({len(open_issues)})",
+         "Use for 'any IT requests for <person>?' and 'how long has it been pending?'.\n",
+         "| Issue | Raised by | Owner | Status | Days open | Why pending |",
+         "|---|---|---|---|---|---|"]
+    for i in open_issues:
+        days = (TODAY - i["date"]).days if i["date"] else None
+        L.append(f"| {i['issue']} | {i['raised_by'] or '—'} | {i['owner'] or '—'} "
+                 f"| {i['status'] or 'Open'} | {days if days is not None else '—'} | {i['remark']} |")
+    return "\n".join(L)
+
+
+def build_bot_context(data: dict) -> str:
+    """Full context for the IT Helper bot — everything an HR head asks about,
+    beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
+    returns/offboarding, peripherals, and open tickets with requester/age."""
+    return "\n\n".join([
+        build_employee_directory(data),
+        _bot_joiners_section(data),
+        _bot_returns_section(data),
+        _bot_peripherals_section(data),
+        _bot_tickets_section(data),
+    ])
+
+
 def get_age_distribution(data: dict) -> dict:
     buckets = {"0-2yr": 0, "2-3yr": 0, "3-3.5yr": 0, "3.5-4yr": 0, ">4yr": 0}
     for row in data["assigned"]:
@@ -1965,11 +2094,11 @@ def main() -> None:
     (OUTPUT_DIR / "slack-summary.md").write_text(slack, encoding="utf-8")
     (OUTPUT_DIR / "full-report.md").write_text(full, encoding="utf-8")
 
-    # Extra context for the IT Helper bot: the full per-person laptop roster
-    # (the report only shows aggregates). Lets the bot answer "what laptop does
-    # X have?" etc.
+    # Extra context for the IT Helper bot beyond the aggregate report: per-person
+    # laptops, joiner readiness + onboarding, returns/offboarding, peripherals,
+    # and open tickets with requester/age.
     (OUTPUT_DIR / "bot-context.md").write_text(
-        build_employee_directory(data), encoding="utf-8")
+        build_bot_context(data), encoding="utf-8")
 
     # Slack Block Kit layout (richer visual post). post-to-slack.py uses these
     # blocks when present, with slack-summary.md as the notification fallback.
