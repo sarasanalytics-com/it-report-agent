@@ -25,7 +25,7 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from answer import answer_question, warm
+from answer import answer_question, warm, get_report_blocks
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,6 +34,12 @@ log = logging.getLogger("it-bot")
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
+# "send me the report", "full/weekly/it report", "report now/please", "generate report"
+_REPORT_RE = re.compile(
+    r"\b(full|weekly|monthly|it|latest|today'?s|the)\s+report\b"
+    r"|\breport\s+(now|please)\b|send (me )?the report|generate (the )?report",
+    re.I,
+)
 
 WELCOME = (
     "Hi! :wave: I'm the IT helper. You can ask me about company laptops and IT "
@@ -81,6 +87,17 @@ def _reply(text: str | None, say, client, event, thread: bool) -> None:
              event.get("user"), event.get("channel_type") or "channel", (question or "")[:120])
     if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
+        return
+
+    # On-demand full report: "send me the IT report", "weekly report", etc.
+    if _REPORT_RE.search(question):
+        say(text=":bar_chart: Pulling the latest IT report…", thread_ts=thread_ts)
+        try:
+            blocks, summary = get_report_blocks()
+            say(text=summary or "Here's the latest IT report:", blocks=blocks, thread_ts=thread_ts)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Failed to build on-demand report")
+            say(text=f":warning: Couldn't build the report just now ({exc}).", thread_ts=thread_ts)
         return
 
     # Post an instant placeholder so it never looks dead, then edit in the answer.
