@@ -970,6 +970,14 @@ def _spend_asof_note(data: dict) -> str:
     return "" if is_current or d is None else f" _(as of {d.strftime('%b')})_"
 
 
+def _spend_month_label(data: dict) -> str:
+    """Reporting-month name for the spend section, e.g. 'June' or
+    'May (latest with data)' when the current month isn't filled in yet."""
+    _, d, is_current = _spend_period(data)
+    label = (d or TODAY).strftime('%B')
+    return label if is_current else f"{label} (latest with data)"
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float]:
     """Get app spend for the current month (or latest month with data), upcoming
     renewals, hardware spend, and grand total.
@@ -1482,7 +1490,7 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    app_total, _, _, grand_total = get_current_month_spend(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1532,10 +1540,11 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
             cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
             L.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
 
-    # 5) Spend this month — laptops + apps
-    L.append("\n*5) 💰 Spend This Month*")
-    L.append(f"Laptops *{fmt_usd(laptop_spend['total_spend'])}* · "
-             f"Apps *{fmt_usd(app_total)}*{_spend_asof_note(data)}")
+    # 5) Spend this month — apps-only + full monthly total + laptop procurement
+    L.append(f"\n*5) 💰 Spend This Month — {_spend_month_label(data)}*")
+    L.append(f"Apps/subscriptions *{fmt_usd(app_total)}* · "
+             f"Total this month *{fmt_usd(grand_total)}*")
+    L.append(f"Laptops (procurement plan) *{fmt_usd(laptop_spend['total_spend'])}*")
 
     # 6) Laptop aging + what to do
     L.append(f"\n*6) ⏳ Laptop Aging — {len(aging)} over 3.5yr ({len(critical)} critical)*")
@@ -1617,7 +1626,7 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    app_total, _, _, grand_total = get_current_month_spend(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1677,14 +1686,13 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
             L.append(f"| {j['name']} | {j['department']} | {j['designation']} "
                      f"| {j['doj'].strftime('%d %b %Y')} | {days} | {j['laptop_config'] or '—'} |")
 
-    # 5. Spend this month
-    _, sdate, scurrent = _spend_period(data)
-    swhen = "this month" if scurrent or not sdate else f"{sdate.strftime('%B %Y')} (latest month with data)"
-    L.append("\n## 5. Spend This Month\n")
+    # 5. Spend this month — apps-only + full monthly total + laptop procurement
+    L.append(f"\n## 5. Spend This Month — {_spend_month_label(data)}\n")
     L.append("| Category | Amount |")
     L.append("|----------|--------|")
-    L.append(f"| Laptops | {fmt_usd(laptop_spend['total_spend'])} |")
-    L.append(f"| Apps / Subscriptions ({swhen}) | {fmt_usd(app_total)} |")
+    L.append(f"| Apps / subscriptions (software only) | {fmt_usd(app_total)} |")
+    L.append(f"| **Total this month** (all software/licenses) | **{fmt_usd(grand_total)}** |")
+    L.append(f"| Laptops (procurement plan) | {fmt_usd(laptop_spend['total_spend'])} |")
 
     # 6. Laptop aging + action
     L.append(f"\n## 6. Laptop Aging — {len(aging)} over 3.5yr ({len(critical)} critical)\n")
@@ -1766,7 +1774,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    app_total, _, _, grand_total = get_current_month_spend(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1816,11 +1824,11 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             lines.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
     blocks += _blk_named_section(f"*⏰ 4) Upcoming Joiners (30d) — {len(joiners)}*", lines, "—")
 
-    # 5) Spend
+    # 5) Spend — apps-only + full monthly total + laptop procurement
     blocks += _blk_named_section(
-        "*💰 5) Spend This Month*",
-        [f"*Laptops* {fmt_usd(laptop_spend['total_spend'])}   ·   "
-         f"*Apps* {fmt_usd(app_total)}{_spend_asof_note(data)}"],
+        f"*💰 5) Spend This Month — {_spend_month_label(data)}*",
+        [f"*Apps/subscriptions* {fmt_usd(app_total)}   ·   *Total this month* {fmt_usd(grand_total)}",
+         f"*Laptops* (procurement plan) {fmt_usd(laptop_spend['total_spend'])}"],
         "—")
 
     # 6) Aging + action
