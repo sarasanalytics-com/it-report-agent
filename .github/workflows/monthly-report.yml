@@ -13,15 +13,20 @@ on:
 permissions:
   contents: write
 
+env:
+  # Run JS actions on Node 24 — clears the Node 20 deprecation warning for any
+  # action still pinned to a Node 20 major (e.g. upload-artifact@v4).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   generate-report:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
