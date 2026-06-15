@@ -1,0 +1,83 @@
+name: IT Daily Report
+
+on:
+  schedule:
+    # 9:00 AM IST every day except Monday (the Weekly report covers Monday).
+    - cron: "30 3 * * 0,2,3,4,5,6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: generate the report & upload the artifact, but DON'T post to Slack"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 1. Fetch Excel files from SharePoint ──
+      - name: Fetch Excel data from SharePoint
+        run: python scripts/fetch-excel.py
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          ASSET_FILE_PATH: ${{ secrets.ASSET_FILE_PATH }}
+          SPEND_FILE_PATH: ${{ secrets.SPEND_FILE_PATH }}
+          PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
+          JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
+          VENDOR_FILE_PATH: ${{ secrets.VENDOR_FILE_PATH }}
+
+      # ── 1b. Fetch IT tickets from ClickUp (best-effort) ──
+      - name: Fetch IT issues from ClickUp
+        run: python scripts/fetch-issues.py
+        continue-on-error: true
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_IT_ISSUES_LIST_ID: ${{ secrets.CLICKUP_IT_ISSUES_LIST_ID }}
+
+      # ── 2. Validate downloaded data ──
+      - name: Validate Excel files
+        run: python scripts/validate-data.py
+
+      # ── 3. Generate the daily snapshot report (same 7 sections) ──
+      - name: Generate report
+        run: python scripts/generate-report.py weekly
+        env:
+          INR_TO_USD_RATE: ${{ secrets.INR_TO_USD_RATE }}
+
+      # ── 4. Post the summary to Slack (skipped on dry runs) ──
+      - name: Post to Slack
+        if: ${{ inputs.dry_run != true }}
+        run: python scripts/post-to-slack.py output/slack-summary.md
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_IT_REPORTS }}
+
+      # ── 5. Upload reports as artifacts ──
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ github.run_id }}
+          path: output/
+          retention-days: 7

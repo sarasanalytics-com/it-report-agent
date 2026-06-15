@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import logging
+import json
 import pathlib
 import threading
 import subprocess
@@ -172,6 +173,22 @@ def get_context() -> str:
 def refresh(force: bool = False) -> str:
     _do_refresh() if force else get_context()
     return _context_cache
+
+
+def get_report_blocks() -> tuple[list | None, str]:
+    """Ensure data is current, then return the Block Kit report + a text
+    fallback for an on-demand 'send me the report' request."""
+    get_context()  # generates slack-blocks.json / slack-summary.md if needed
+    blocks = None
+    bpath = OUTPUT / "slack-blocks.json"
+    if bpath.exists():
+        try:
+            blocks = json.loads(bpath.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            blocks = None
+    spath = OUTPUT / "slack-summary.md"
+    summary = spath.read_text(encoding="utf-8")[:2900] if spath.exists() else "IT report"
+    return blocks, summary
 
 
 def answer_question(question: str) -> str:
