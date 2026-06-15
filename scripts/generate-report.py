@@ -695,24 +695,65 @@ def _is_total_row(row: dict) -> bool:
     return app_name in TOTAL_ROW_KEYWORDS
 
 
+_warned_spend_keys: set = set()
+
+
+def _warn_spend_once(key: str, message: str) -> None:
+    if key not in _warned_spend_keys:
+        _warned_spend_keys.add(key)
+        print(f"  [spend] WARNING: {message}", file=sys.stderr)
+
+
+def _spend_has_data(data: dict, key) -> bool:
+    """True if any non-total row has a numeric value in the given month column."""
+    return any(_to_number(r.get(key)) is not None for r in data["spend"] if not _is_total_row(r))
+
+
+def _spend_period(data: dict) -> tuple:
+    """Choose which month column to report spend from.
+
+    Prefers the current month; if that column has no data entered yet, falls
+    back to the most recent earlier month that does. Returns
+    (key, date, is_current). When no month has data, returns the current
+    month's column (so totals are 0) or (None, None, True) if no column matches.
+    """
+    cols = {}
+    for row in data["spend"]:
+        for key in row:
+            d = parse_date(key)
+            if d:
+                cols[key] = d
+    current = next(((k, d) for k, d in cols.items()
+                    if d.year == TODAY.year and d.month == TODAY.month), None)
+    if current and _spend_has_data(data, current[0]):
+        return current[0], current[1], True
+    # Fall back to the latest earlier month that has data.
+    past = sorted((d, k) for k, d in cols.items() if d <= TODAY)
+    for d, k in reversed(past):
+        if _spend_has_data(data, k):
+            return k, d, False
+    if current:
+        return current[0], current[1], True
+    return None, None, True
+
+
+def _spend_asof_note(data: dict) -> str:
+    """' (as of May)' when spend is reported from a fallback (earlier) month
+    because the current month has no data yet; '' when it's the current month."""
+    _, d, is_current = _spend_period(data)
+    return "" if is_current or d is None else f" _(as of {d.strftime('%b')})_"
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float]:
-    """Get app spend for current month, upcoming renewals, hardware spend, and grand total.
+    """Get app spend for the current month (or latest month with data), upcoming
+    renewals, hardware spend, and grand total.
 
     Returns: (app_only_total, renewals, hardware_total, grand_total)
         - app_only_total: sum of app/subscription rows (excludes hardware + Total rows)
         - hardware_total: sum of "Laptops Procurement", "Antivirus,MDM" type rows
         - grand_total: app + hardware (matches the Total row in the sheet)
     """
-    # Find the column matching current month
-    month_key = None
-    for row in data["spend"]:
-        for key in row:
-            dt = parse_date(key)
-            if dt and dt.year == TODAY.year and dt.month == TODAY.month:
-                month_key = key
-                break
-        if month_key:
-            break
+    month_key, _month_date, is_current = _spend_period(data)
 
     app_total = 0.0
     hw_total = 0.0
@@ -730,15 +771,10 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float
             else:
                 app_total += val
 
-    # Only flag the problem cases to stderr so a run reveals why a month total
-    # is zero (missing column vs. empty data) without noise on healthy runs.
-    if month_key is None:
-        print("  [spend] WARNING: no column matched the current month in the spend sheet",
-              file=sys.stderr)
-    elif app_total == 0:
-        print(f"  [spend] WARNING: current-month column {month_key!r} found but app total is 0 "
-              f"({numeric_cells} numeric cell(s)) — check the spend sheet for that month",
-              file=sys.stderr)
+    # Warn (once) only when no month anywhere has spend data — the fallback in
+    # _spend_period already handles a not-yet-filled current month.
+    if month_key is None or app_total == 0:
+        _warn_spend_once("no-data", "no spend data found in any month column of the spend sheet")
 
     # Upcoming renewals (app only)
     renewals = []
@@ -774,9 +810,14 @@ def get_app_spend_detail(data: dict) -> dict:
     Returns: this_month, last_month (USD totals, app rows only), delta,
     top_apps (list of {app, dept, amount}), by_dept (dict dept→amount).
     """
-    this_key = _month_column_key(data, TODAY.year, TODAY.month)
-    prev_dt = (TODAY.replace(day=1) - timedelta(days=1))
-    prev_key = _month_column_key(data, prev_dt.year, prev_dt.month)
+    # Use the same reporting month as get_current_month_spend (falls back to the
+    # latest month with data when the current one is empty) so figures match.
+    this_key, this_date, _ = _spend_period(data)
+    if this_date:
+        prev_dt = this_date.replace(day=1) - timedelta(days=1)
+        prev_key = _month_column_key(data, prev_dt.year, prev_dt.month)
+    else:
+        prev_key = None
 
     this_total = 0.0
     last_total = 0.0
@@ -1234,7 +1275,7 @@ def generate_weekly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
 
     # ── Spend MTD ──
     lines.append("\n*💰 Spend MTD*")
-    lines.append(f"Apps *{fmt_usd(app_total)}* · Laptops *{fmt_usd(laptop_spend['total_spend'])}*")
+    lines.append(f"Apps *{fmt_usd(app_total)}*{_spend_asof_note(data)} · Laptops *{fmt_usd(laptop_spend['total_spend'])}*")
     if renewals:
         lines.append(f"🔔 {len(renewals)} renewal(s) in 30d: " +
                      ", ".join(r['app'] for r in renewals[:3]) + ("…" if len(renewals) > 3 else ""))
@@ -1451,7 +1492,11 @@ def generate_weekly_full(data: dict, prev_snap: Optional[dict] = None) -> str:
                      "section populates automatically from ClickUp.")
 
     # ── 💰 Spend (App + Laptop) MTD ──
-    lines.append(f"\n## 💰 Spend — {TODAY.strftime('%B %Y')} (MTD)\n")
+    _spend_key, _spend_date, _spend_is_current = _spend_period(data)
+    _spend_when = (f"{TODAY.strftime('%B %Y')} (MTD)" if _spend_is_current or not _spend_date
+                   else f"{_spend_date.strftime('%B %Y')} (latest month with data; "
+                        f"{TODAY.strftime('%B')} not yet recorded)")
+    lines.append(f"\n## 💰 Spend — {_spend_when}\n")
     lines.append("### App / Subscriptions\n")
     lines.append("| Category | Amount |")
     lines.append("|----------|--------|")
@@ -1570,7 +1615,7 @@ def generate_monthly_slack(data: dict, prev_snap: Optional[dict] = None) -> str:
     # ── Monthly Spend ──
     mom = _fmt_delta(app_detail["this_month"], app_detail["last_month"], as_int=False) if app_detail["last_month"] else "—"
     lines.append("\n*💰 Monthly Spend*")
-    lines.append(f"Apps *{fmt_usd(app_total)}* (vs last mo {fmt_usd(app_detail['last_month'])}, Δ {mom}) · "
+    lines.append(f"Apps *{fmt_usd(app_total)}*{_spend_asof_note(data)} (vs prev mo {fmt_usd(app_detail['last_month'])}, Δ {mom}) · "
                  f"Laptops *{fmt_usd(laptop_spend['total_spend'])}*" +
                  (f" ({pace['pct_used']:.0f}% of budget)" if pace['pct_used'] is not None else ""))
 

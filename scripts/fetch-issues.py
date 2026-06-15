@@ -119,17 +119,14 @@ def fetch_latest_comment(task_id: str) -> str:
         # Collapse newlines so multi-line updates fit one table cell
         return " ".join((c.get("comment_text") or "").split()).strip()
 
-    # Prefer the newest non-automated comment; fall back to newest non-empty.
-    fallback = ""
+    # Return the newest non-automated comment. If a ticket only has automated
+    # acknowledgement templates, return "" so the report falls back to the
+    # status-derived remark instead of showing bot boilerplate.
     for c in comments:
         text = _text(c)
-        if not text:
-            continue
-        if not fallback:
-            fallback = text
-        if not any(m in text.lower() for m in _AUTO_COMMENT_MARKERS):
+        if text and not any(m in text.lower() for m in _AUTO_COMMENT_MARKERS):
             return text
-    return fallback
+    return ""
 
 
 def fetch_tasks(list_id: str) -> list[dict]:
