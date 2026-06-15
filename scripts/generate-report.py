@@ -83,9 +83,17 @@ def parse_date(val) -> Optional[dt.date]:
     if isinstance(val, dt.datetime):
         return val.date()
     if isinstance(val, str):
+        s = val.strip()
         for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"):
             try:
-                return dt.datetime.strptime(val.strip(), fmt).date()
+                return dt.datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        # Month-column headers like 'Jun-26', 'Jun-2026', 'June 2026', '2026-06'.
+        for fmt in ("%b-%y", "%b-%Y", "%B-%y", "%B-%Y", "%b %y", "%b %Y",
+                    "%B %y", "%B %Y", "%Y-%m"):
+            try:
+                return dt.datetime.strptime(s, fmt).date().replace(day=1)
             except ValueError:
                 continue
     return None
@@ -988,6 +996,27 @@ def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float
                 hw_total += val
             else:
                 app_total += val
+
+    # One-time diagnostic: which month columns were detected, what was chosen,
+    # and the app/hardware split — so spend mismatches can be traced from the log.
+    if "spend-debug" not in _warned_spend_keys:
+        _warned_spend_keys.add("spend-debug")
+        cols = {}
+        all_keys: set = set()
+        for row in data["spend"]:
+            all_keys.update(row.keys())
+            for k in row:
+                d = parse_date(k)
+                if d:
+                    cols.setdefault(k, d)
+        detected = ", ".join(f"{k!r}→{d.strftime('%b %Y')}"
+                             for k, d in sorted(cols.items(), key=lambda x: x[1]))
+        unparsed = [k for k in all_keys if k not in cols]
+        print(f"  [spend] columns: {sorted(map(str, all_keys))}", file=sys.stderr)
+        print(f"  [spend] detected month columns: {detected or '(none)'}", file=sys.stderr)
+        print(f"  [spend] NOT parsed as months: {sorted(map(str, unparsed))}", file=sys.stderr)
+        print(f"  [spend] reporting month={month_key!r} is_current={is_current} "
+              f"→ apps={app_total:.2f}, hardware={hw_total:.2f}", file=sys.stderr)
 
     # Warn (once) only when no month anywhere has spend data — the fallback in
     # _spend_period already handles a not-yet-filled current month.
