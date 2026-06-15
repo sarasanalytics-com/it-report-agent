@@ -1,0 +1,57 @@
+# Render Blueprint for the IT Helper Slack bot.
+# Deploy: Render → New → Blueprint → pick this repo. It creates a Background
+# Worker (Socket Mode opens no web port, so it must NOT be a Web Service) built
+# from bot/Dockerfile. Fill the `sync: false` secrets in the Render dashboard —
+# never commit them.
+services:
+  - type: worker
+    name: it-helper-bot
+    runtime: docker
+    dockerfilePath: bot/Dockerfile
+    dockerContext: .
+    plan: starter            # Background Workers require a paid plan on Render
+    autoDeploy: true
+    envVars:
+      # Non-secret defaults
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5
+      - key: BOT_REPORT_TYPE
+        value: monthly
+      - key: DATA_REFRESH_TTL
+        value: "600"
+      # Secrets — set these in the Render dashboard (Environment), not in git
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_APP_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: BOT_ALLOWED_USERS
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: SHAREPOINT_SITE_ID
+        sync: false
+      - key: SHAREPOINT_DRIVE_ID
+        sync: false
+      - key: CLICKUP_API_TOKEN
+        sync: false
+      - key: CLICKUP_IT_ISSUES_LIST_ID
+        sync: false
+      # Optional overrides (leave unset to use defaults)
+      - key: ASSET_FILE_PATH
+        sync: false
+      - key: SPEND_FILE_PATH
+        sync: false
+      - key: PROCUREMENT_FILE_PATH
+        sync: false
+      - key: JOINERS_FILE_PATH
+        sync: false
+      - key: VENDOR_FILE_PATH
+        sync: false
+      - key: INR_TO_USD_RATE
+        sync: false
