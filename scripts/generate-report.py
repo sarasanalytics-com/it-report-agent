@@ -83,9 +83,17 @@ def parse_date(val) -> Optional[dt.date]:
     if isinstance(val, dt.datetime):
         return val.date()
     if isinstance(val, str):
+        s = val.strip()
         for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"):
             try:
-                return dt.datetime.strptime(val.strip(), fmt).date()
+                return dt.datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        # Month-column headers like 'Jun-26', 'Jun-2026', 'June 2026', '2026-06'.
+        for fmt in ("%b-%y", "%b-%Y", "%B-%y", "%B-%Y", "%b %y", "%b %Y",
+                    "%B %y", "%B %Y", "%Y-%m"):
+            try:
+                return dt.datetime.strptime(s, fmt).date().replace(day=1)
             except ValueError:
                 continue
     return None
@@ -962,6 +970,63 @@ def _spend_asof_note(data: dict) -> str:
     return "" if is_current or d is None else f" _(as of {d.strftime('%b')})_"
 
 
+def _spend_month_label(data: dict) -> str:
+    """Reporting-month name for the spend section, e.g. 'June' or
+    'May (latest with data)' when the current month isn't filled in yet."""
+    _, d, is_current = _spend_period(data)
+    label = (d or TODAY).strftime('%B')
+    return label if is_current else f"{label} (latest with data)"
+
+
+def get_software_spend_this_month(data: dict) -> float:
+    """Total software / subscription / license spend for the reporting month.
+
+    This is the spend tracker's monthly total — the sum of every named line
+    item in that month's column. Rows with a blank APPLICATION name (e.g. the
+    sheet's own green Total row, which has no name) and explicit total rows are
+    skipped, so the figure equals the sheet total without double counting.
+    """
+    month_key, _d, is_current = _spend_period(data)
+    total = 0.0
+    line_items = 0
+    if month_key:
+        for row in data["spend"]:
+            name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
+            if not name or _is_total_row(row):
+                continue
+            val = _to_number(row.get(month_key))
+            if val is not None:
+                total += val
+                line_items += 1
+    _spend_diagnostic_once(data, month_key, is_current, total, line_items)
+    return total
+
+
+def _spend_diagnostic_once(data, month_key, is_current, software_total, line_items) -> None:
+    """One-time stderr dump of how the spend sheet was parsed, so figure
+    mismatches can be traced from the Actions log."""
+    if "spend-debug" in _warned_spend_keys:
+        return
+    _warned_spend_keys.add("spend-debug")
+    cols = {}
+    all_keys: set = set()
+    for row in data["spend"]:
+        all_keys.update(row.keys())
+        for k in row:
+            d = parse_date(k)
+            if d:
+                cols.setdefault(k, d)
+    detected = ", ".join(f"{k!r}→{d.strftime('%b %Y')}"
+                         for k, d in sorted(cols.items(), key=lambda x: x[1]))
+    unparsed = [k for k in all_keys if k not in cols]
+    print(f"  [spend] columns: {sorted(map(str, all_keys))}", file=sys.stderr)
+    print(f"  [spend] detected month columns: {detected or '(none)'}", file=sys.stderr)
+    print(f"  [spend] NOT parsed as months: {sorted(map(str, unparsed))}", file=sys.stderr)
+    print(f"  [spend] reporting month={month_key!r} is_current={is_current} "
+          f"→ software total {software_total:.2f} from {line_items} line item(s)",
+          file=sys.stderr)
+
+
 def get_current_month_spend(data: dict) -> tuple[float, list[dict], float, float]:
     """Get app spend for the current month (or latest month with data), upcoming
     renewals, hardware spend, and grand total.
@@ -1453,7 +1518,7 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    software_total = get_software_spend_this_month(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1503,10 +1568,10 @@ def build_report_slack(data: dict, prev_snap: Optional[dict], period: str) -> st
             cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
             L.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
 
-    # 5) Spend this month — laptops + apps
-    L.append("\n*5) 💰 Spend This Month*")
-    L.append(f"Laptops *{fmt_usd(laptop_spend['total_spend'])}* · "
-             f"Apps *{fmt_usd(app_total)}*{_spend_asof_note(data)}")
+    # 5) Spend this month — total software/license spend + laptop procurement
+    L.append(f"\n*5) 💰 Spend This Month — {_spend_month_label(data)}*")
+    L.append(f"Apps & licenses *{fmt_usd(software_total)}*")
+    L.append(f"Laptops (procurement plan) *{fmt_usd(laptop_spend['total_spend'])}*")
 
     # 6) Laptop aging + what to do
     L.append(f"\n*6) ⏳ Laptop Aging — {len(aging)} over 3.5yr ({len(critical)} critical)*")
@@ -1588,7 +1653,7 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    software_total = get_software_spend_this_month(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1648,14 +1713,12 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
             L.append(f"| {j['name']} | {j['department']} | {j['designation']} "
                      f"| {j['doj'].strftime('%d %b %Y')} | {days} | {j['laptop_config'] or '—'} |")
 
-    # 5. Spend this month
-    _, sdate, scurrent = _spend_period(data)
-    swhen = "this month" if scurrent or not sdate else f"{sdate.strftime('%B %Y')} (latest month with data)"
-    L.append("\n## 5. Spend This Month\n")
+    # 5. Spend this month — total software/license spend + laptop procurement
+    L.append(f"\n## 5. Spend This Month — {_spend_month_label(data)}\n")
     L.append("| Category | Amount |")
     L.append("|----------|--------|")
-    L.append(f"| Laptops | {fmt_usd(laptop_spend['total_spend'])} |")
-    L.append(f"| Apps / Subscriptions ({swhen}) | {fmt_usd(app_total)} |")
+    L.append(f"| **Apps & licenses** (all subscriptions) | **{fmt_usd(software_total)}** |")
+    L.append(f"| Laptops (procurement plan) | {fmt_usd(laptop_spend['total_spend'])} |")
 
     # 6. Laptop aging + action
     L.append(f"\n## 6. Laptop Aging — {len(aging)} over 3.5yr ({len(critical)} critical)\n")
@@ -1737,7 +1800,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
-    app_total, _, _, _ = get_current_month_spend(data)
+    software_total = get_software_spend_this_month(data)
     runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
@@ -1787,11 +1850,11 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             lines.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
     blocks += _blk_named_section(f"*⏰ 4) Upcoming Joiners (30d) — {len(joiners)}*", lines, "—")
 
-    # 5) Spend
+    # 5) Spend — total software/license spend + laptop procurement
     blocks += _blk_named_section(
-        "*💰 5) Spend This Month*",
-        [f"*Laptops* {fmt_usd(laptop_spend['total_spend'])}   ·   "
-         f"*Apps* {fmt_usd(app_total)}{_spend_asof_note(data)}"],
+        f"*💰 5) Spend This Month — {_spend_month_label(data)}*",
+        [f"*Apps & licenses* {fmt_usd(software_total)}",
+         f"*Laptops* (procurement plan) {fmt_usd(laptop_spend['total_spend'])}"],
         "—")
 
     # 6) Aging + action
