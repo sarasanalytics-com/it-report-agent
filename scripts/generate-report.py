@@ -233,13 +233,26 @@ def load_data() -> dict:
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
 
-    # Surface any 'ready stock' row with no make/model so the mystery
-    # 'Unspecified — details not recorded' entries can be identified/cleaned.
+    # A 'ready stock' row only counts as a real laptop if it carries some
+    # identifier (make/model/serial/tag). Rows with just stray cells (e.g. a
+    # lone 'Condition') are junk and shouldn't inflate the Stock Ready count.
+    _ID_FIELDS = ("Laptop Make", "Laptop Model", "Laptop Serial Number",
+                  "Serial Number", "Serial No", "Laptop Asset Tag")
+    kept = [r for r in data["in_stock"]
+            if any(str(r.get(k, "") or "").strip() for k in _ID_FIELDS)]
+    dropped = len(data["in_stock"]) - len(kept)
+    if dropped:
+        print(f"  Excluded {dropped} in-stock row(s) with no identifier (blank/junk).",
+              file=sys.stderr)
+    data["in_stock"] = kept
+
+    # Surface any kept 'ready stock' row that has an identifier but no make/model
+    # so the 'Unspecified — …' entries can be identified and completed at source.
     for row in data["in_stock"]:
         if not str(row.get("Laptop Make", "") or "").strip() and \
            not str(row.get("Laptop Model", "") or "").strip():
             populated = {k: v for k, v in row.items() if v not in (None, "")}
-            print(f"  Note: in-stock laptop with no make/model → {populated or '(entirely blank row)'}",
+            print(f"  Note: in-stock laptop with no make/model → {populated}",
                   file=sys.stderr)
 
     return data
