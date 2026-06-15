@@ -1,0 +1,29 @@
+# Slack app manifest for the IT bot.
+# Create the app at https://api.slack.com/apps → "From an app manifest",
+# paste this in, then install to the workspace.
+display_information:
+  name: IT Helper
+  description: Ask about company laptops, new-joiner readiness, IT requests and spend.
+  background_color: "#2c2d30"
+features:
+  bot_user:
+    display_name: IT Helper
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # see @mentions in channels
+      - chat:write          # post replies
+      - im:history          # read DMs sent to the bot
+      - im:read             # detect DM channels
+      - im:write            # open/DM the user
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention         # @mentioned in a channel
+      - message.im          # direct message to the bot
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true # no public URL needed
+  token_rotation_enabled: false
