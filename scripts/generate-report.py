@@ -238,6 +238,9 @@ def load_data() -> dict:
     # data/vendor_payments.xlsx by scripts/fetch-excel.py. First sheet is read.
     data["vendor"] = _load_vendor_payments()
 
+    # Laptop delivery lead-times by vendor (optional table in the budget book).
+    data["delivery"] = _load_delivery_timelines(proc_wb)
+
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
 
@@ -315,6 +318,101 @@ def _load_vendor_payments() -> list[dict]:
           f"{wb.sheetnames}", file=sys.stderr)
     wb.close()
     return []
+
+
+_DELIVERY_META_COLS = ("device type", "processor", "department")
+
+
+def _load_delivery_timelines(proc_wb) -> dict:
+    """Find and read the laptop delivery lead-time matrix from the budget
+    workbook. Auto-detects the sheet/header by looking for a 'Device Type'
+    column. Returns {headers, rows} (empty if not present)."""
+    try:
+        # Prefer a sheet whose name signals delivery timelines; the "Configuration"
+        # sheet also has a "Device Type" column, so for other sheets we also
+        # require a "Processor" column to avoid matching it.
+        named = [s for s in proc_wb.sheetnames
+                 if any(k in s.lower() for k in ("deliver", "timeline", "lead time", "lead-time"))]
+        ordered = named + [s for s in proc_wb.sheetnames if s not in named]
+        for sheet in ordered:
+            ws = proc_wb[sheet]
+            scan = list(ws.iter_rows(min_row=1, max_row=15, values_only=True))
+            hdr_idx = None
+            for i, raw in enumerate(scan):
+                cells = [str(c).strip().lower() if c is not None else "" for c in raw]
+                has_device = any("device type" in c for c in cells)
+                has_proc = any(c == "processor" for c in cells)
+                if has_device and (sheet in named or has_proc):
+                    hdr_idx = i
+                    break
+            if hdr_idx is None:
+                continue
+            headers = [str(c).strip() if c is not None else "" for c in scan[hdr_idx]]
+            rows = []
+            for raw in ws.iter_rows(min_row=hdr_idx + 2, values_only=True):
+                if all(c is None for c in raw):
+                    continue
+                rec = {headers[j]: raw[j] for j in range(min(len(headers), len(raw)))}
+                if str(rec.get("Device Type", "") or "").strip():
+                    rows.append(rec)
+            if rows:
+                print(f"  Delivery timelines: sheet '{sheet}', header row {hdr_idx + 1}, "
+                      f"{len(rows)} device row(s)")
+                return {"headers": headers, "rows": rows}
+    except Exception as exc:  # never break the report over this optional table
+        print(f"  Warning: could not read delivery timelines: {exc}", file=sys.stderr)
+    return {"headers": [], "rows": []}
+
+
+def _leadtime_to_days(text) -> Optional[int]:
+    """Worst-case lead time in days from text like '1 to 2 days', '1 week',
+    '1 to 2 weeks', '3 days'. Returns None if not parseable."""
+    s = str(text or "").lower()
+    nums = [int(n) for n in re.findall(r"\d+", s)]
+    if not nums:
+        return None
+    worst = max(nums)
+    return worst * 7 if "week" in s else worst
+
+
+def get_delivery_options(data: dict) -> list[dict]:
+    """Structured delivery options per device: vendors with lead-time text/days
+    and the fastest vendor."""
+    d = data.get("delivery", {}) or {}
+    headers = [h for h in d.get("headers", []) if h]
+    vendor_cols = [h for h in headers if h.strip().lower() not in _DELIVERY_META_COLS]
+    options = []
+    for rec in d.get("rows", []):
+        vendors = []
+        for vc in vendor_cols:
+            txt = str(rec.get(vc, "") or "").strip()
+            if not txt:
+                continue
+            vendors.append({"vendor": vc.strip(), "text": txt, "days": _leadtime_to_days(txt)})
+        timed = [v for v in vendors if v["days"] is not None]
+        options.append({
+            "device": str(rec.get("Device Type", "") or "").strip(),
+            "processor": str(rec.get("Processor", "") or "").strip(),
+            "departments": str(rec.get("Department", "") or rec.get("Department ", "") or "").strip(),
+            "vendors": vendors,
+            "fastest": min(timed, key=lambda v: v["days"]) if timed else None,
+        })
+    return options
+
+
+def get_fastest_delivery_for_department(data: dict, department: str) -> Optional[dict]:
+    """Best (fastest) delivery option for a given department, matched against the
+    'Department' column of the delivery matrix. Returns the option dict or None."""
+    dept = str(department or "").strip().lower()
+    if not dept:
+        return None
+    best = None
+    for opt in get_delivery_options(data):
+        depts = opt["departments"].lower()
+        if dept and (dept in depts or any(d.strip() and d.strip() in dept for d in depts.split(","))):
+            if opt["fastest"] and (best is None or opt["fastest"]["days"] < best["fastest"]["days"]):
+                best = opt
+    return best
 
 
 def _load_it_issues(asset_wb) -> list[dict]:
@@ -862,9 +960,36 @@ def _bot_joiners_section(data: dict) -> str:
             total = len(done) + len(pending)
             status = (f"{len(done)}/{total} checklist done"
                       + (f"; pending: {', '.join(pending)}" if pending else "; all done"))
+        fast = get_fastest_delivery_for_department(data, j["department"])
+        if fast and fast["fastest"]:
+            f = fast["fastest"]
+            if f["days"] is not None and f["days"] <= j["days_until"]:
+                deliv = (f" · laptop can arrive in time if ordered now "
+                         f"(fastest {f['vendor']} ~{f['text']})")
+            else:
+                deliv = (f" · ⚠️ delivery risk — fastest ~{f['text']} ({f['vendor']}) "
+                         f"vs joins in {j['days_until']}d")
+        else:
+            deliv = ""
         L.append(f"- *{j['name']}* — {j['department'] or '—'}, {j['designation'] or '—'} · "
                  f"DOJ {j['doj'].strftime('%d %b %Y')} (in {j['days_until']}d) · "
-                 f"laptop needed: {j['laptop_config'] or 'standard'} · onboarding: {status}")
+                 f"laptop needed: {j['laptop_config'] or 'standard'} · onboarding: {status}{deliv}")
+    return "\n".join(L)
+
+
+def _bot_delivery_section(data: dict) -> str:
+    """Laptop delivery lead-times by vendor (for 'how fast can we get a laptop?')."""
+    options = get_delivery_options(data)
+    if not options:
+        return "# LAPTOP DELIVERY LEAD TIMES\nNo delivery-timeline table found."
+    L = ["# LAPTOP DELIVERY LEAD TIMES",
+         "How fast each vendor delivers each device. Use for 'how quickly can we "
+         "get a [device]?' and 'which vendor is fastest?'.\n",
+         "| Device | For (depts) | Fastest | All vendors |", "|---|---|---|---|"]
+    for o in options:
+        fastest = f"{o['fastest']['vendor']} ({o['fastest']['text']})" if o["fastest"] else "—"
+        allv = ", ".join(f"{v['vendor']}: {v['text']}" for v in o["vendors"]) or "—"
+        L.append(f"| {o['device']} | {o['departments'] or '—'} | {fastest} | {allv} |")
     return "\n".join(L)
 
 
@@ -984,6 +1109,7 @@ def build_bot_context(data: dict) -> str:
         _bot_peripherals_section(data),
         _bot_tickets_section(data),
         _bot_software_section(data),
+        _bot_delivery_section(data),
     ])
 
 
@@ -2016,6 +2142,20 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
              + (f" ({bva['laptop_pct_of_monthly']:.0f}% of monthly budget)"
                 if bva['laptop_pct_of_monthly'] is not None else "") + " |")
     L.append(f"| Software & licenses — this month | {fmt_usd(bva['software_this_month'])} |")
+
+    # 10. Laptop delivery lead times by vendor
+    options = get_delivery_options(data)
+    if options:
+        L.append("\n## 10. Laptop Delivery Lead Times\n")
+        L.append("How quickly each vendor can deliver, per device. *Fastest* is the "
+                 "quickest option (worst-case days).\n")
+        L.append("| Device | For (depts) | Fastest | All vendors |")
+        L.append("|---|---|---|---|")
+        for o in options:
+            fastest = (f"{o['fastest']['vendor']} ({o['fastest']['text']})"
+                       if o['fastest'] else "—")
+            allv = ", ".join(f"{v['vendor']}: {v['text']}" for v in o["vendors"]) or "—"
+            L.append(f"| {o['device']} | {o['departments'] or '—'} | {fastest} | {allv} |")
 
     L.append(f"\n---\n{_fx_footnote()}")
     L.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
