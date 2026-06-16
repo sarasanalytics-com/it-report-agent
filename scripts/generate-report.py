@@ -752,11 +752,32 @@ def get_spend_pace(data: dict) -> dict:
     laptop_spend = get_laptop_spend(data)
     actual = laptop_spend["total_spend"]            # USD
     actual_inr = laptop_spend.get("total_spend_inr", 0.0)
-    planned_inr = 0.0
+
+    # The plan sheet has individual line items AND summary rows ('Total Estimated
+    # Cost', 'Laptop (Exit Employees)', 'Final Estimated Cost'). The authoritative
+    # FY plan is the 'Final Estimated Cost' row (line items minus reusable exit
+    # laptops) — NOT the sum of every Total Price cell (which would multi-count).
+    final_cost = total_est = None
+    line_sum = 0.0
     for row in data.get("proc_plan", []):
-        v = row.get("Total Price (INR)")
-        if isinstance(v, (int, float)):
-            planned_inr += float(v)
+        label = " ".join(" ".join(str(v).split()) for v in row.values()
+                          if isinstance(v, str)).lower()
+        tp = _to_number(row.get("Total Price (INR)"))
+        if "final estimated cost" in label:
+            if tp is not None:
+                final_cost = tp
+        elif "total estimated cost" in label or "estimated cost" in label:
+            if tp is not None:
+                total_est = tp
+        elif tp is not None and "exit" not in label:
+            line_sum += tp
+    if final_cost is not None:
+        planned_inr = final_cost
+    elif total_est is not None:
+        planned_inr = total_est
+    else:
+        planned_inr = line_sum
+
     planned = inr_to_usd(planned_inr)               # USD, to match `actual`
     # Planned is annual; divide by 12 for a per-month figure.
     monthly_planned = planned / 12 if planned else 0
