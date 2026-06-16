@@ -1209,9 +1209,8 @@ def _bot_software_section(data: dict) -> str:
     pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of this month's budget"
            if bva['laptop_pct_of_monthly'] is not None else "")
     L.append(f"- Laptop spend this month: {fmt_usd(bva['laptop_actual_this_month'])}{pct}")
-    models = ", ".join(f"{m['model']} ×{m['joiners']}" for m in bva["laptop_models"] if m.get("joiners"))
-    L.append(f"- Laptops procured this month: {bva['laptops_this_month']}"
-             + (f" ({models})" if models else ""))
+    L.append(f"- Laptops procured this month: {bva['laptops_this_month']} "
+             f"(from the Actual Spends Total row; per-model split isn't reliable in the sheet)")
     L.append(f"- New laptops added to inventory this month: {bva['new_laptops_registered']}")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
     return "\n".join(L)
@@ -1271,9 +1270,10 @@ def get_laptop_spend(data: dict) -> dict:
     result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
     total_row = None
     for row in data["actual_spend"]:
-        # The row label (laptop model/category) is in the first column, which the
-        # real sheet heads "Joiners" (not "Model").
-        model = row.get("Model") or row.get("Joiners") or row.get("col_0", "")
+        # The row label (laptop model/category) is in the first column, whose
+        # header is blank → read as 'col_0'. (The 'Joiners' column is the annual
+        # total, NOT the label.)
+        model = row.get("Model") or row.get("col_0", "")
         model_str = str(model).strip().lower() if model else ""
         # Capture the Total row separately for authoritative monthly spend
         if model_str in ("total", "grand total"):
@@ -1299,8 +1299,8 @@ def get_laptop_spend(data: dict) -> dict:
             })
             result["total_joiners"] += joiners
 
-    # Authoritative spend from the Total row. The sheet records INR, so convert
-    # to USD to match the report's reporting currency.
+    # Authoritative figures from the Total row (the per-model rows are unreliable).
+    # Spend is INR → convert to USD; joiner count is taken as-is.
     if total_row:
         for key, val in total_row.items():
             key_lower = str(key).strip().lower()
@@ -1308,6 +1308,10 @@ def get_laptop_spend(data: dict) -> dict:
                 if abbr in key_lower and "spend" in key_lower:
                     num = _to_number(val)
                     result["total_spend"] = inr_to_usd(num) if num is not None else 0.0
+                elif abbr in key_lower and "joiner" in key_lower:
+                    num = _to_number(val)
+                    if num is not None:
+                        result["total_joiners"] = int(num)
 
     return result
 
@@ -2266,9 +2270,7 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     L.append(f"| Laptop spend — this month | {fmt_usd(bva['laptop_actual_this_month'])}"
              + (f" ({bva['laptop_pct_of_monthly']:.0f}% of monthly budget)"
                 if bva['laptop_pct_of_monthly'] is not None else "") + " |")
-    models = ", ".join(f"{m['model']} ×{m['joiners']}" for m in bva["laptop_models"] if m.get("joiners"))
-    L.append(f"| Laptops procured — this month | {bva['laptops_this_month']}"
-             + (f" ({models})" if models else "") + " |")
+    L.append(f"| Laptops procured — this month | {bva['laptops_this_month']} |")
     L.append(f"| New laptops added to inventory — this month | {bva['new_laptops_registered']} |")
     L.append(f"| Software & licenses — this month | {fmt_usd(bva['software_this_month'])} |")
 
