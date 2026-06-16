@@ -106,7 +106,10 @@ month?", "are we within budget?") and laptop procurement ("how many laptops did 
 we buy this month — which model, how much, when?"), use SOFTWARE & LICENSES and \
 IT BUDGET vs ACTUAL. For laptops give the count, the model(s), the spend in ₹ \
 (and $), and the purchase date(s) from the register if listed; if a purchase \
-date isn't recorded, say so rather than guessing.
+date isn't recorded, say so rather than guessing. For "which vendor did we buy \
+from?" use the "Laptops by vendor" breakdown in IT BUDGET vs ACTUAL (it lists \
+each vendor and how many laptops — and which models — came from them); only say \
+the vendor isn't recorded if that breakdown is genuinely absent.
 - For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
 fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
 & PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \
