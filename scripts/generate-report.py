@@ -1289,6 +1289,12 @@ def _bot_joiners_history_section(data: dict) -> str:
         am = by_m.get(m["month"], {"new_joiner": 0, "replacement": 0})
         L.append(f"| {m['month']} | {m['count']} | {am['new_joiner']} | {am['replacement']} |")
     L.append(f"| **YTD** | **{h['ytd']}** | **{a['ytd_new_joiner']}** | **{a['ytd_replacement']}** |")
+    # Names per month, so "who joined in May?" can be answered, not just a count.
+    named = [m for m in h["months"] if m["names"]]
+    if named:
+        L.append("\nWho joined each month (names, for 'who joined in <month>?'):")
+        for m in named:
+            L.append(f"- {m['month']}: {', '.join(m['names'])}")
     return "\n".join(L)
 
 
@@ -1609,18 +1615,21 @@ def get_software_spend_history(data: dict) -> dict:
 
 
 def get_joiners_history(data: dict) -> dict:
-    """Headcount that joined each month this year (by Confirm DOJ), up to the
-    current month. {months:[{month,count}], ytd}."""
-    by_month: dict[int, int] = defaultdict(int)
+    """People who joined each month this year (by Confirm DOJ), up to the
+    current month, with their names. {months:[{month,count,names}], ytd}."""
+    by_month: dict[int, list] = defaultdict(list)
     for row in data.get("joinings", []):
         d = parse_date(row.get("Confirm DOJ") or row.get("DOJ As per Offer letter"))
         if d and d.year == TODAY.year and d <= TODAY:
-            by_month[d.month] += 1
+            name = str(row.get("Employee name") or row.get("Employee Name")
+                       or row.get("Name") or "").strip()
+            by_month[d.month].append(name or "Unknown")
     months, ytd = [], 0
     for m in range(1, TODAY.month + 1):
-        c = by_month.get(m, 0)
-        months.append({"month": dt.date(TODAY.year, m, 1).strftime("%b"), "count": c})
-        ytd += c
+        names = by_month.get(m, [])
+        months.append({"month": dt.date(TODAY.year, m, 1).strftime("%b"),
+                       "count": len(names), "names": names})
+        ytd += len(names)
     return {"months": months, "ytd": ytd}
 
 
