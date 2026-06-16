@@ -211,6 +211,7 @@ def load_data() -> dict:
         "backup": read_sheet(asset_wb, "Backup Laptops 3years old"),
         "history": read_sheet(asset_wb, "Assset History"),
         "returned": read_sheet(asset_wb, "Laptop Returned"),
+        "pending_returns": read_sheet(asset_wb, "Laptop yet to Return"),
         "purchased": read_sheet(asset_wb, "New Laptops purchased "),
         "sold": read_sheet(asset_wb, "Laptops sold "),
         "mouse": read_sheet(asset_wb, "Mouse"),
@@ -1071,24 +1072,60 @@ def _bot_delivery_section(data: dict) -> str:
     return "\n".join(L)
 
 
-def _bot_returns_section(data: dict) -> str:
-    """Laptop returns / offboarding — who handed a laptop back and when."""
-    items = []
-    for row in data.get("returned", []):
-        emp = (row.get("Employee Name") or row.get("Employee name")
-               or row.get("Name") or row.get("Name ") or "")
+def get_pending_returns(data: dict) -> list[dict]:
+    """Laptops still to be returned by employees, from the 'Laptop yet to Return'
+    sheet."""
+    out = []
+    for row in data.get("pending_returns", []):
+        emp = str(row.get("Employee Name") or row.get("Username") or "").strip()
+        if not emp and not str(row.get("Laptop Serial Number") or "").strip():
+            continue
         make = str(row.get("Laptop Make", "") or "").strip()
         model = str(row.get("Laptop Model", "") or "").strip()
-        sn = (row.get("Laptop Serial Number") or row.get("Laptop Asset Tag") or "")
-        items.append((str(emp).strip(), f"{make} {model}".strip(),
-                      parse_date(row.get("Returned Date")), str(sn).strip()))
+        out.append({
+            "employee": emp,
+            "department": str(row.get("Department", "") or "").strip(),
+            "laptop": f"{make} {model}".strip(),
+            "serial": str(row.get("Laptop Serial Number") or row.get("Laptop Asset Tag") or "").strip(),
+            "remarks": str(row.get("Remarks", "") or "").strip(),
+        })
+    return out
+
+
+def _bot_returns_section(data: dict) -> str:
+    """Laptop returns + still-pending returns (offboarding)."""
+    # Returned laptops. Real columns: Username, Laptop Make/Model, Serial Number,
+    # Laptop Tag, Returned Date, Resigned/Replacement.
+    items = []
+    for row in data.get("returned", []):
+        emp = str(row.get("Username") or row.get("Employee Name") or "").strip()
+        make = str(row.get("Laptop Make", "") or "").strip()
+        model = str(row.get("Laptop Model", "") or "").strip()
+        sn = str(row.get("Serial Number") or row.get("Laptop Tag") or "").strip()
+        reason = str(row.get("Resigned/Replacement", "") or "").strip()
+        items.append((emp, f"{make} {model}".strip(),
+                      parse_date(row.get("Returned Date")), sn, reason))
     items.sort(key=lambda x: x[2] or dt.date.min, reverse=True)
-    L = [f"# LAPTOP RETURNS / OFFBOARDING ({len(items)} on record)",
-         "Laptops handed back (e.g. when someone leaves). Most recent first.\n",
-         "| Employee | Laptop | Returned on | Serial/Tag |", "|---|---|---|---|"]
-    for emp, laptop, d, sn in items[:100]:
-        L.append(f"| {emp or '—'} | {laptop or '—'} "
-                 f"| {d.strftime('%d %b %Y') if d else '—'} | {sn or '—'} |")
+
+    pending = get_pending_returns(data)
+    L = [f"# LAPTOPS YET TO RETURN ({len(pending)} pending)",
+         "Laptops still to be collected from employees (e.g. exits). "
+         "Use for 'how many laptops are yet to be returned?'.\n"]
+    if pending:
+        L.append("| Employee | Dept | Laptop | Serial/Tag | Remarks |")
+        L.append("|---|---|---|---|---|")
+        for p in pending:
+            L.append(f"| {p['employee'] or '—'} | {p['department'] or '—'} | {p['laptop'] or '—'} "
+                     f"| {p['serial'] or '—'} | {p['remarks'] or '—'} |")
+    else:
+        L.append("None pending.")
+
+    L.append(f"\n# LAPTOP RETURNS — completed ({len(items)} on record, most recent first)")
+    L.append("| Employee | Laptop | Returned on | Serial/Tag | Reason |")
+    L.append("|---|---|---|---|---|")
+    for emp, laptop, d, sn, reason in items[:60]:
+        L.append(f"| {emp or '—'} | {laptop or '—'} | {d.strftime('%d %b %Y') if d else '—'} "
+                 f"| {sn or '—'} | {reason or '—'} |")
     return "\n".join(L)
 
 
@@ -1234,7 +1271,9 @@ def get_laptop_spend(data: dict) -> dict:
     result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
     total_row = None
     for row in data["actual_spend"]:
-        model = row.get("Model") or row.get("col_0", "")
+        # The row label (laptop model/category) is in the first column, which the
+        # real sheet heads "Joiners" (not "Model").
+        model = row.get("Model") or row.get("Joiners") or row.get("col_0", "")
         model_str = str(model).strip().lower() if model else ""
         # Capture the Total row separately for authoritative monthly spend
         if model_str in ("total", "grand total"):
