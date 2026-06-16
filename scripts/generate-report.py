@@ -1208,10 +1208,17 @@ def _bot_software_section(data: dict) -> str:
              f"(≈ {fmt_usd(bva['laptop_monthly_budget'])}/month)")
     pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of this month's budget"
            if bva['laptop_pct_of_monthly'] is not None else "")
-    L.append(f"- Laptop spend this month: {fmt_usd(bva['laptop_actual_this_month'])}{pct}")
-    L.append(f"- Laptops procured this month: {bva['laptops_this_month']} "
-             f"(count of laptops actually purchased per the Actual Spends sheet)")
-    L.append(f"- New laptops added to inventory this month: {bva['new_laptops_registered']}")
+    models = ", ".join(f"{m['model']} ×{m['units']}" for m in bva["laptop_models"])
+    L.append(f"- Laptops procured this month: {bva['laptops_this_month']}"
+             + (f" — {models}" if models else ""))
+    L.append(f"- Laptop spend this month: {fmt_inr_full(bva['laptop_spend_inr'])} "
+             f"({fmt_usd(bva['laptop_actual_this_month'])}){pct}")
+    if bva["purchases_this_month"]:
+        L.append("- Laptops in the purchase register this month (model · purchase date · serial):")
+        for p in bva["purchases_this_month"]:
+            L.append(f"  • {(p['brand'] + ' ' + p['model']).strip() or '—'} · "
+                     f"{p['date'].strftime('%d %b %Y') if p['date'] else 'date not recorded'} · "
+                     f"{p['serial'] or '—'}")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
     return "\n".join(L)
 
@@ -1267,7 +1274,8 @@ def get_laptop_spend(data: dict) -> dict:
     }
     abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
 
-    result = {"models": [], "total_joiners": 0, "units_this_month": 0, "total_spend": 0.0}
+    result = {"models": [], "total_joiners": 0, "units_this_month": 0,
+              "total_spend": 0.0, "total_spend_inr": 0.0}
     total_row = None
     for row in data["actual_spend"]:
         # The row label (laptop model/category) is in the first column, whose
@@ -1314,6 +1322,7 @@ def get_laptop_spend(data: dict) -> dict:
                 if abbr in key_lower and "spend" in key_lower:
                     num = _to_number(val)
                     result["total_spend"] = inr_to_usd(num) if num is not None else 0.0
+                    result["total_spend_inr"] = num if num is not None else 0.0
                 elif abbr in key_lower and "joiner" in key_lower:
                     num = _to_number(val)
                     if num is not None:
@@ -1346,9 +1355,10 @@ def get_purchases_this_month(data: dict) -> list[dict]:
         d = parse_date(row.get("Warranty Start Date"))
         if d and d.year == TODAY.year and d.month == TODAY.month and d <= TODAY:
             purchases.append({
-                "brand": row.get("Brand", ""),
-                "model": row.get("Model", ""),
-                "serial": row.get("Serial no", ""),
+                "brand": str(row.get("Brand", "") or "").strip(),
+                "model": str(row.get("Model", "") or "").strip(),
+                "serial": str(row.get("Serial no", "") or "").strip(),
+                "configuration": str(row.get("Configuration", "") or "").strip(),
                 "date": d,
             })
     purchases.sort(key=lambda x: x["date"], reverse=True)
@@ -1496,6 +1506,8 @@ def get_budget_vs_actual(data: dict) -> dict:
         "laptop_pct_of_monthly": pace["pct_used"],
         "laptops_this_month": ls.get("units_this_month", 0),
         "laptop_models": ls.get("models", []),
+        "laptop_spend_inr": ls.get("total_spend_inr", 0.0),
+        "purchases_this_month": get_purchases_this_month(data),
         "new_laptops_registered": len(get_purchases_this_month(data)),
         "software_this_month": get_software_spend_this_month(data),
     }
@@ -2273,12 +2285,21 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     L.append("|---|---|")
     L.append(f"| Laptop procurement — annual budget | {fmt_usd(bva['laptop_annual_budget'])} |")
     L.append(f"| Laptop procurement — monthly budget | {fmt_usd(bva['laptop_monthly_budget'])} |")
-    L.append(f"| Laptop spend — this month | {fmt_usd(bva['laptop_actual_this_month'])}"
-             + (f" ({bva['laptop_pct_of_monthly']:.0f}% of monthly budget)"
+    L.append(f"| Laptop spend — this month | {fmt_inr_full(bva['laptop_spend_inr'])} "
+             f"({fmt_usd(bva['laptop_actual_this_month'])})"
+             + (f", {bva['laptop_pct_of_monthly']:.0f}% of monthly budget"
                 if bva['laptop_pct_of_monthly'] is not None else "") + " |")
-    L.append(f"| Laptops procured — this month | {bva['laptops_this_month']} |")
-    L.append(f"| New laptops added to inventory — this month | {bva['new_laptops_registered']} |")
+    laptop_models = ", ".join(f"{m['model']} ×{m['units']}" for m in bva["laptop_models"])
+    L.append(f"| Laptops procured — this month | {bva['laptops_this_month']}"
+             + (f" ({laptop_models})" if laptop_models else "") + " |")
     L.append(f"| Software & licenses — this month | {fmt_usd(bva['software_this_month'])} |")
+    if bva["purchases_this_month"]:
+        L.append("\n**Laptops in the purchase register this month**\n")
+        L.append("| Model | Configuration | Purchase date | Serial |")
+        L.append("|---|---|---|---|")
+        for p in bva["purchases_this_month"]:
+            L.append(f"| {(p['brand'] + ' ' + p['model']).strip() or '—'} | {p['configuration'] or '—'} "
+                     f"| {p['date'].strftime('%d %b %Y') if p['date'] else '—'} | {p['serial'] or '—'} |")
 
     # 10. Laptop delivery lead times by vendor
     options = get_delivery_options(data)
