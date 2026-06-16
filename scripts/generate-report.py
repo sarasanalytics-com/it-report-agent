@@ -430,14 +430,18 @@ def get_payment_terms(data: dict) -> dict:
 def _load_unplanned_spends(wbs: list) -> dict:
     """Find a dedicated 'Unplanned' spends sheet (the IT owner maintains it for
     ad-hoc / off-budget purchases) and read it AS-IS, so its figures are never
-    reinterpreted. Auto-detects any sheet whose name mentions 'unplanned'
-    (also 'un-planned'/'unbudgeted'/'ad hoc'). Returns {sheet, headers, rows}."""
+    reinterpreted. Auto-detects any sheet whose name mentions 'unplan' (so
+    'Unplaned'/'unplanned'/'un-planned' all hit) or 'unbudgeted'/'ad hoc'.
+
+    Scans EVERY downloaded workbook in data/ — not just a fixed few — so it
+    doesn't matter which file the tab lives in. Returns {sheet, headers, rows}."""
     def _is_unplanned(name: str) -> bool:
-        # Match the 'unplan' stem so common misspellings ('Unplaned', one n) and
-        # 'un-planned'/'unplanned' all hit; plus a few synonyms.
         n = name.strip().lower().replace("-", "").replace(" ", "")
         return ("unplan" in n or "unbudget" in n or "adhoc" in n
                 or "outofbudget" in n)
+
+    # Prefer the already-open workbooks (no re-read), then any other spreadsheet
+    # in data/ we haven't covered (e.g. the vendor payments file).
     for wb in wbs:
         try:
             for sheet in wb.sheetnames:
@@ -451,6 +455,25 @@ def _load_unplanned_spends(wbs: list) -> dict:
                 return {"sheet": sheet, "headers": headers, "rows": rows}
         except Exception as exc:  # noqa: BLE001
             print(f"  Warning: could not read unplanned spends: {exc}", file=sys.stderr)
+
+    for path in sorted(DATA_DIR.glob("*.xlsx")):
+        try:
+            extra = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            for sheet in extra.sheetnames:
+                if not _is_unplanned(sheet):
+                    continue
+                rows = read_sheet_auto(extra, sheet)
+                if not rows:
+                    continue
+                headers = list(rows[0].keys())
+                print(f"  Unplanned spends: sheet '{sheet}' in {path.name}, "
+                      f"{len(rows)} row(s)")
+                return {"sheet": sheet, "headers": headers, "rows": rows}
+        finally:
+            extra.close()
     return {"sheet": None, "headers": [], "rows": []}
 
 
