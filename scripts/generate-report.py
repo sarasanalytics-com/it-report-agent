@@ -478,39 +478,66 @@ def _load_unplanned_spends(wbs: list) -> dict:
 
 
 def get_unplanned_spends(data: dict) -> dict:
-    """Normalise the unplanned-spends sheet into displayable rows + a total.
-    Reproduces the sheet's own columns verbatim (no relabelling) and, if an
-    amount-like column is present, sums it. Returns {sheet, headers, rows,
-    amount_col, total}."""
+    """Unplanned / ad-hoc spends, from EITHER a dedicated 'Unplanned' tab (read
+    verbatim) OR 'UnPlaned'-labelled rows inside the 'Laptop procurement plan'
+    sheet (the Department column), kept SEPARATE from the planned budget.
+
+    Returns a dict whose 'mode' is one of:
+      'sheet'      -> {mode, sheet, headers, rows, amount_col, total}
+      'plan_rows'  -> {mode, sheet, items:[{category,model,quantity,amount_inr}], total}
+      'none'       -> {mode}
+    """
+    # 1) Dedicated tab — reproduced verbatim (its own columns).
     raw = data.get("unplanned") or {}
     rows = raw.get("rows") or []
     headers = [h for h in (raw.get("headers") or [])
                if not str(h).startswith("col_")]  # drop blank-header spacer cols
-    if not rows:
-        return {"sheet": raw.get("sheet"), "headers": [], "rows": [],
-                "amount_col": None, "total": None}
-    # Pick the column most likely to hold the money amount.
-    amount_col = None
-    for h in headers:
-        hl = str(h).lower()
-        if any(k in hl for k in ("amount", "cost", "price", "spend", "value",
-                                 "total", "inr", "₹")):
-            amount_col = h
-            break
-    out_rows, total, any_amount = [], 0.0, False
-    for r in rows:
-        # Keep only rows with some real content (ignore blank spacer rows).
-        if not any(str(v).strip() for v in r.values() if v is not None):
+    if rows:
+        amount_col = None
+        for h in headers:
+            hl = str(h).lower()
+            if any(k in hl for k in ("amount", "cost", "price", "spend", "value",
+                                     "total", "inr", "₹")):
+                amount_col = h
+                break
+        out_rows, total, any_amount = [], 0.0, False
+        for r in rows:
+            if not any(str(v).strip() for v in r.values() if v is not None):
+                continue  # blank spacer row
+            clean = {h: r.get(h) for h in headers}
+            if amount_col is not None:
+                n = _to_number(r.get(amount_col))
+                if n is not None:
+                    total += n
+                    any_amount = True
+            out_rows.append(clean)
+        if out_rows:
+            return {"mode": "sheet", "sheet": raw.get("sheet"), "headers": headers,
+                    "rows": out_rows, "amount_col": amount_col,
+                    "total": total if any_amount else None}
+
+    # 2) 'UnPlaned' rows inside the Laptop procurement plan sheet.
+    items, total, any_amount = [], 0.0, False
+    for row in data.get("proc_plan", []):
+        dept = str(row.get("Department", "") or "")
+        if "unplan" not in dept.lower().replace("-", "").replace(" ", ""):
             continue
-        clean = {h: r.get(h) for h in headers}
-        if amount_col is not None:
-            n = _to_number(r.get(amount_col))
-            if n is not None:
-                total += n
-                any_amount = True
-        out_rows.append(clean)
-    return {"sheet": raw.get("sheet"), "headers": headers, "rows": out_rows,
-            "amount_col": amount_col, "total": total if any_amount else None}
+        model = str(row.get("Model", "") or "").strip()
+        qty = _to_number(row.get("Quantity"))
+        amt = _to_number(row.get("Total Price (INR)"))
+        if not model and qty in (None, 0) and amt is None:
+            continue  # bare section-header row, nothing to show
+        items.append({"category": " ".join(dept.split()), "model": model,
+                      "quantity": int(qty) if qty is not None else None,
+                      "amount_inr": amt})
+        if amt:
+            total += amt
+            any_amount = True
+    if items:
+        return {"mode": "plan_rows", "sheet": "Laptop procurement plan",
+                "items": items, "total": total if any_amount else None}
+
+    return {"mode": "none"}
 
 
 def _leadtime_to_days(text) -> Optional[int]:
@@ -1434,13 +1461,38 @@ def _bot_joiners_history_section(data: dict) -> str:
 
 
 def _bot_unplanned_section(data: dict) -> str:
-    """Unplanned / ad-hoc spends — a separate section, reproduced verbatim from
-    the owner's 'Unplanned' sheet (kept apart from the planned laptop budget)."""
+    """Unplanned / ad-hoc spends — a separate section, from a dedicated tab OR
+    the 'UnPlaned' rows in the procurement plan (kept apart from the budget)."""
     u = get_unplanned_spends(data)
-    if not u["rows"]:
+    mode = u.get("mode", "none")
+    if mode == "none":
         return ("# UNPLANNED / AD-HOC SPENDS\n"
-                "No unplanned-spends sheet is connected. If one is maintained, "
-                "name its tab with 'Unplanned' and its rows will appear here.")
+                "No unplanned spends are recorded right now (no 'Unplanned' tab, "
+                "and no 'UnPlaned' rows in the procurement plan).")
+
+    # Rows recorded inside the Laptop procurement plan sheet.
+    if mode == "plan_rows":
+        items = u["items"]
+        L = [f"# UNPLANNED / AD-HOC SPENDS ({len(items)} item(s))",
+             "Unplanned / ad-hoc laptop replacements recorded in the 'Laptop "
+             "procurement plan' sheet (the 'UnPlaned Replacements' rows) — kept "
+             "SEPARATE from the planned Total Estimated Cost budget.\n",
+             "| Category | Model | Qty | Amount (INR) |",
+             "|---|---|---|---|"]
+        for it in items:
+            qty = "—" if it["quantity"] is None else str(it["quantity"])
+            amt = (fmt_inr_full(it["amount_inr"])
+                   if it["amount_inr"] is not None else "—")
+            L.append(f"| {it['category'] or '—'} | {it['model'] or '—'} "
+                     f"| {qty} | {amt} |")
+        if u["total"] is not None:
+            L.append(f"\nTotal unplanned spend: {fmt_inr_full(u['total'])}.")
+        else:
+            L.append("\n(Amounts for these unplanned items aren't filled in on the "
+                     "sheet — only the models/quantities are recorded.)")
+        return "\n".join(L)
+
+    # Dedicated tab — reproduced verbatim.
     headers, amount_col = u["headers"], u["amount_col"]
 
     def _cell(h, v):
