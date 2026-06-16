@@ -1,0 +1,44 @@
+name: Dump Excel Schema
+
+# One-off helper: downloads the workbooks and prints each sheet's column headers
+# to the log (no data values), so the report's column mapping can be verified
+# against the real files. Manual trigger only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  dump-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch Excel data from SharePoint
+        run: python scripts/fetch-excel.py
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          ASSET_FILE_PATH: ${{ secrets.ASSET_FILE_PATH }}
+          SPEND_FILE_PATH: ${{ secrets.SPEND_FILE_PATH }}
+          PROCUREMENT_FILE_PATH: ${{ secrets.PROCUREMENT_FILE_PATH }}
+          JOINERS_FILE_PATH: ${{ secrets.JOINERS_FILE_PATH }}
+          VENDOR_FILE_PATH: ${{ secrets.VENDOR_FILE_PATH }}
+
+      - name: Print schema (headers only)
+        run: python scripts/dump-schema.py
