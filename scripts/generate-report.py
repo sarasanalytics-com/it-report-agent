@@ -1263,6 +1263,18 @@ def _bot_software_section(data: dict) -> str:
         planned_td = bva["laptop_monthly_inr"] * elapsed
         L.append(f"  • Planned for these {elapsed} months (₹monthly × {elapsed}): "
                  f"{fmt_inr_full(planned_td)}; actual {fmt_inr_full(hist['ytd_spend_inr'])}.")
+        diff = planned_td - hist["ytd_spend_inr"]
+        if diff > 0:
+            L.append(f"  • SAVED so far: {fmt_inr_full(diff)} under the planned budget "
+                     f"(spent {fmt_inr_full(hist['ytd_spend_inr'])} of a planned "
+                     f"{fmt_inr_full(planned_td)}). When spend is below budget, this is "
+                     f"the saving — state it as money saved.")
+        elif diff < 0:
+            L.append(f"  • OVER budget so far by {fmt_inr_full(-diff)} "
+                     f"(spent {fmt_inr_full(hist['ytd_spend_inr'])} vs a planned "
+                     f"{fmt_inr_full(planned_td)}).")
+        else:
+            L.append("  • Exactly on the planned budget so far (no saving or overspend).")
     # Which vendor each laptop was bought from — from the purchase register's
     # 'Purchased From' column, so "from which vendor did we buy?" is answerable.
     bv = get_purchases_by_vendor(data)
