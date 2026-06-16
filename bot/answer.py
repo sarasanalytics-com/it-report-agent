@@ -84,8 +84,9 @@ LAPTOP RETURNS / OFFBOARDING.
 - For her team's requests ("any IT tickets for X?", "how long pending?"), use \
 IT TICKETS — match the person in 'Raised by', and quote the days open.
 - For software/subscriptions ("what apps do we pay for?", "what renews next \
-month?", "are we within budget?"), use SOFTWARE & LICENSES and IT BUDGET vs \
-ACTUAL — list renewals due and the relevant figures.
+month?", "are we within budget?") and procurement counts ("how many laptops did \
+we buy this month?"), use SOFTWARE & LICENSES and IT BUDGET vs ACTUAL — it lists \
+laptops procured this month (and by model), spend, and renewals.
 - For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
 fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
 & PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \

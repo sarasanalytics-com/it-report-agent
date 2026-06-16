@@ -1172,6 +1172,10 @@ def _bot_software_section(data: dict) -> str:
     pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of this month's budget"
            if bva['laptop_pct_of_monthly'] is not None else "")
     L.append(f"- Laptop spend this month: {fmt_usd(bva['laptop_actual_this_month'])}{pct}")
+    models = ", ".join(f"{m['model']} ×{m['joiners']}" for m in bva["laptop_models"] if m.get("joiners"))
+    L.append(f"- Laptops procured this month: {bva['laptops_this_month']}"
+             + (f" ({models})" if models else ""))
+    L.append(f"- New laptops added to inventory this month: {bva['new_laptops_registered']}")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
     return "\n".join(L)
 
@@ -1432,14 +1436,18 @@ def get_upcoming_renewals(data: dict, days: int = 60) -> list[dict]:
 
 
 def get_budget_vs_actual(data: dict) -> dict:
-    """IT budget vs actual: laptop procurement (annual plan vs spend) plus the
-    current month's software/license spend."""
+    """IT budget vs actual: laptop procurement (annual plan vs spend), how many
+    laptops were procured this month, plus the current month's software spend."""
     pace = get_spend_pace(data)
+    ls = get_laptop_spend(data)
     return {
         "laptop_annual_budget": pace["annual_planned"],
         "laptop_monthly_budget": pace["monthly_planned"],
         "laptop_actual_this_month": pace["actual"],
         "laptop_pct_of_monthly": pace["pct_used"],
+        "laptops_this_month": ls.get("total_joiners", 0),
+        "laptop_models": ls.get("models", []),
+        "new_laptops_registered": len(get_purchases_this_month(data)),
         "software_this_month": get_software_spend_this_month(data),
     }
 
@@ -2219,6 +2227,10 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     L.append(f"| Laptop spend — this month | {fmt_usd(bva['laptop_actual_this_month'])}"
              + (f" ({bva['laptop_pct_of_monthly']:.0f}% of monthly budget)"
                 if bva['laptop_pct_of_monthly'] is not None else "") + " |")
+    models = ", ".join(f"{m['model']} ×{m['joiners']}" for m in bva["laptop_models"] if m.get("joiners"))
+    L.append(f"| Laptops procured — this month | {bva['laptops_this_month']}"
+             + (f" ({models})" if models else "") + " |")
+    L.append(f"| New laptops added to inventory — this month | {bva['new_laptops_registered']} |")
     L.append(f"| Software & licenses — this month | {fmt_usd(bva['software_this_month'])} |")
 
     # 10. Laptop delivery lead times by vendor
