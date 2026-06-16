@@ -145,16 +145,16 @@ def _run_step(cmd: list[str], timeout: int = 240) -> bool:
 
 
 def _build_context() -> str:
+    # Use only the human-readable report + bot context (correctly labelled
+    # currencies). metrics.json is intentionally excluded — it carries USD-only
+    # convenience fields (e.g. monthly_budget_usd) that confused the answers.
     parts = []
     full = OUTPUT / "full-report.md"
     directory = OUTPUT / "bot-context.md"
-    metrics = OUTPUT / "metrics.json"
     if full.exists():
         parts.append("# LATEST IT REPORT\n" + full.read_text(encoding="utf-8"))
     if directory.exists():
         parts.append(directory.read_text(encoding="utf-8"))
-    if metrics.exists():
-        parts.append("# STRUCTURED METRICS (JSON)\n" + metrics.read_text(encoding="utf-8"))
     return "\n\n".join(parts)
 
 
