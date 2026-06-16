@@ -25,7 +25,7 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from answer import answer_question, warm, get_report_blocks
+from answer import answer_question, warm, get_report_blocks, force_refresh
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -40,6 +40,13 @@ _REPORT_RE = re.compile(
     r"|\breport\s+(now|please)\b|send (me )?the report|generate (the )?report",
     re.I,
 )
+# "refresh", "reload the data", "re-fetch", "re-sync", "use the latest sheet" —
+# force a fresh download after a source sheet is edited.
+_REFRESH_RE = re.compile(
+    r"\b(refresh|reload|re-?fetch|re-?sync|re-?download)\b"
+    r"|\b(latest|updated|new|current)\s+(data|sheet|numbers|figures)\b",
+    re.I,
+)
 
 WELCOME = (
     "Hi! :wave: I'm the IT helper. You can ask me about company laptops and IT "
@@ -49,7 +56,9 @@ WELCOME = (
     "• *Is there a laptop ready for <name>?*\n"
     "• *What IT requests are open at the moment?*\n"
     "• *How much did we spend on software this month?*\n"
-    "Just send your question and I'll take a look. :mag:"
+    "Just send your question and I'll take a look. :mag:\n"
+    "_Tip: just edited a sheet? Say *refresh* and I'll pull the latest numbers "
+    "before you ask._"
 )
 
 
@@ -87,6 +96,22 @@ def _reply(text: str | None, say, client, event, thread: bool) -> None:
              event.get("user"), event.get("channel_type") or "channel", (question or "")[:120])
     if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
+        return
+
+    # Manual data reload: pull the sheets again right now (e.g. after an edit).
+    # Synchronous so the confirmation only lands once fresh data is in place.
+    if _REFRESH_RE.search(question):
+        say(text=":arrows_counterclockwise: Reloading the latest IT data — one moment…",
+            thread_ts=thread_ts)
+        try:
+            force_refresh()
+            say(text=":white_check_mark: Done — I've pulled the latest sheets. Ask me "
+                     "your question again and I'll use the updated numbers.",
+                thread_ts=thread_ts)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Manual refresh failed")
+            say(text=f":warning: I couldn't reload the data just now ({exc}). "
+                     "Please try again in a moment.", thread_ts=thread_ts)
         return
 
     # On-demand full report: "send me the IT report", "weekly report", etc.

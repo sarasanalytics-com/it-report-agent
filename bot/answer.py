@@ -34,7 +34,7 @@ OUTPUT = ROOT / "output"
 # Most-complete report (monthly includes everything weekly does and more).
 REPORT_TYPE = os.environ.get("BOT_REPORT_TYPE", "monthly")
 # How long (seconds) to reuse fetched data before refreshing.
-REFRESH_TTL = int(os.environ.get("DATA_REFRESH_TTL", "600"))
+REFRESH_TTL = int(os.environ.get("DATA_REFRESH_TTL", "300"))
 # Haiku is cheap/fast and plenty for grounded Q&A; override for higher quality.
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 MAX_ANSWER_TOKENS = int(os.environ.get("BOT_MAX_TOKENS", "900"))
@@ -220,6 +220,14 @@ def get_context() -> str:
 def refresh(force: bool = False) -> str:
     _do_refresh() if force else get_context()
     return _context_cache
+
+
+def force_refresh() -> str:
+    """Synchronously re-download the sheets and rebuild the context, blocking
+    until done. Use right after a source sheet is edited so the next answer
+    reflects the change. Returns the fresh context (or a 'no data' note)."""
+    _do_refresh()
+    return _context_cache or "(no IT data is currently available)"
 
 
 def get_report_blocks() -> tuple[list | None, str]:
