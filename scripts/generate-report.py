@@ -195,6 +195,20 @@ def read_sheet(wb, sheet_name: str, header_row: int = 1) -> list[dict]:
     return result
 
 
+def read_sheet_auto(wb, sheet_name: str) -> list[dict]:
+    """Like read_sheet but auto-detects the header row (the most-populated of the
+    first 6 rows). Use for hand-made sheets that may have a title/blank row first."""
+    if sheet_name not in wb.sheetnames:
+        return []
+    ws = wb[sheet_name]
+    best_idx, best_count = 1, -1
+    for i, raw in enumerate(ws.iter_rows(min_row=1, max_row=6, values_only=True), start=1):
+        n = sum(1 for c in raw if c not in (None, ""))
+        if n > best_count:
+            best_idx, best_count = i, n
+    return read_sheet(wb, sheet_name, header_row=best_idx)
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -245,6 +259,10 @@ def load_data() -> dict:
     # Laptop delivery lead-times + vendor payment terms (optional budget tables).
     data["delivery"] = _load_delivery_timelines(proc_wb)
     data["payment_terms"] = _load_payment_terms(proc_wb)
+
+    # Unplanned / ad-hoc spends — a dedicated sheet the IT owner maintains
+    # (auto-detected by name). Read as-is so we never reinterpret the figures.
+    data["unplanned"] = _load_unplanned_spends([proc_wb, spend_wb, asset_wb, join_wb])
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
@@ -407,6 +425,67 @@ def get_payment_terms(data: dict) -> dict:
     """Cleaned {vendor: payment terms} mapping."""
     return {str(k).strip(): " ".join(str(v).split())
             for k, v in (data.get("payment_terms") or {}).items() if str(v).strip()}
+
+
+def _load_unplanned_spends(wbs: list) -> dict:
+    """Find a dedicated 'Unplanned' spends sheet (the IT owner maintains it for
+    ad-hoc / off-budget purchases) and read it AS-IS, so its figures are never
+    reinterpreted. Auto-detects any sheet whose name mentions 'unplanned'
+    (also 'un-planned'/'unbudgeted'/'ad hoc'). Returns {sheet, headers, rows}."""
+    def _is_unplanned(name: str) -> bool:
+        n = name.strip().lower().replace("-", "").replace(" ", "")
+        return ("unplanned" in n or "unbudgeted" in n or "adhoc" in n
+                or "outofbudget" in n)
+    for wb in wbs:
+        try:
+            for sheet in wb.sheetnames:
+                if not _is_unplanned(sheet):
+                    continue
+                rows = read_sheet_auto(wb, sheet)
+                if not rows:
+                    continue
+                headers = list(rows[0].keys())
+                print(f"  Unplanned spends: sheet '{sheet}', {len(rows)} row(s)")
+                return {"sheet": sheet, "headers": headers, "rows": rows}
+        except Exception as exc:  # noqa: BLE001
+            print(f"  Warning: could not read unplanned spends: {exc}", file=sys.stderr)
+    return {"sheet": None, "headers": [], "rows": []}
+
+
+def get_unplanned_spends(data: dict) -> dict:
+    """Normalise the unplanned-spends sheet into displayable rows + a total.
+    Reproduces the sheet's own columns verbatim (no relabelling) and, if an
+    amount-like column is present, sums it. Returns {sheet, headers, rows,
+    amount_col, total}."""
+    raw = data.get("unplanned") or {}
+    rows = raw.get("rows") or []
+    headers = [h for h in (raw.get("headers") or [])
+               if not str(h).startswith("col_")]  # drop blank-header spacer cols
+    if not rows:
+        return {"sheet": raw.get("sheet"), "headers": [], "rows": [],
+                "amount_col": None, "total": None}
+    # Pick the column most likely to hold the money amount.
+    amount_col = None
+    for h in headers:
+        hl = str(h).lower()
+        if any(k in hl for k in ("amount", "cost", "price", "spend", "value",
+                                 "total", "inr", "₹")):
+            amount_col = h
+            break
+    out_rows, total, any_amount = [], 0.0, False
+    for r in rows:
+        # Keep only rows with some real content (ignore blank spacer rows).
+        if not any(str(v).strip() for v in r.values() if v is not None):
+            continue
+        clean = {h: r.get(h) for h in headers}
+        if amount_col is not None:
+            n = _to_number(r.get(amount_col))
+            if n is not None:
+                total += n
+                any_amount = True
+        out_rows.append(clean)
+    return {"sheet": raw.get("sheet"), "headers": headers, "rows": out_rows,
+            "amount_col": amount_col, "total": total if any_amount else None}
 
 
 def _leadtime_to_days(text) -> Optional[int]:
@@ -1327,6 +1406,44 @@ def _bot_joiners_history_section(data: dict) -> str:
     return "\n".join(L)
 
 
+def _bot_unplanned_section(data: dict) -> str:
+    """Unplanned / ad-hoc spends — a separate section, reproduced verbatim from
+    the owner's 'Unplanned' sheet (kept apart from the planned laptop budget)."""
+    u = get_unplanned_spends(data)
+    if not u["rows"]:
+        return ("# UNPLANNED / AD-HOC SPENDS\n"
+                "No unplanned-spends sheet is connected. If one is maintained, "
+                "name its tab with 'Unplanned' and its rows will appear here.")
+    headers, amount_col = u["headers"], u["amount_col"]
+
+    def _cell(h, v):
+        if v is None or str(v).strip() == "":
+            return "—"
+        if h == amount_col:
+            n = _to_number(v)
+            return fmt_inr_full(n) if n is not None else " ".join(str(v).split())
+        if "date" in str(h).lower():
+            d = parse_date(v)
+            if d:
+                return d.strftime("%d %b %Y")
+        if isinstance(v, (dt.datetime, dt.date)):
+            return v.strftime("%d %b %Y")
+        return " ".join(str(v).split()).replace("|", "/")
+
+    L = [f"# UNPLANNED / AD-HOC SPENDS ({len(u['rows'])} item(s))",
+         f"Spends recorded OUTSIDE the planned budget, from the '{u['sheet']}' "
+         f"sheet — shown exactly as recorded and kept SEPARATE from the planned "
+         f"laptop procurement budget.\n",
+         "| " + " | ".join(headers) + " |",
+         "|" + "---|" * len(headers)]
+    for r in u["rows"]:
+        L.append("| " + " | ".join(_cell(h, r.get(h)) for h in headers) + " |")
+    if u["total"] is not None:
+        L.append(f"\nTotal unplanned spend (sum of '{amount_col}'): "
+                 f"{fmt_inr_full(u['total'])}.")
+    return "\n".join(L)
+
+
 def build_bot_context(data: dict) -> str:
     """Full context for the IT Helper bot — everything an HR head asks about,
     beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
@@ -1339,6 +1456,7 @@ def build_bot_context(data: dict) -> str:
         _bot_peripherals_section(data),
         _bot_tickets_section(data),
         _bot_software_section(data),
+        _bot_unplanned_section(data),
         _bot_delivery_section(data),
     ])
 
