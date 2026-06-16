@@ -2158,8 +2158,9 @@ def generate_joiner_alert(data: dict) -> str:
 
 def _fx_footnote() -> str:
     rate = round(1 / INR_TO_USD_RATE, 1) if INR_TO_USD_RATE else 0
-    return (f"_Currency: USD ($). Laptop procurement & budget figures are recorded in INR "
-            f"and converted at $1 = ₹{rate} (set via INR_TO_USD_RATE)._")
+    return (f"_Currency: laptop procurement & vendor amounts are shown in ₹ (INR); "
+            f"app/software subscriptions in $ (USD). Reference rate $1 ≈ ₹{rate} "
+            f"(INR_TO_USD_RATE)._")
 
 
 def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str:
