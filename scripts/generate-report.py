@@ -1210,7 +1210,7 @@ def _bot_software_section(data: dict) -> str:
            if bva['laptop_pct_of_monthly'] is not None else "")
     L.append(f"- Laptop spend this month: {fmt_usd(bva['laptop_actual_this_month'])}{pct}")
     L.append(f"- Laptops procured this month: {bva['laptops_this_month']} "
-             f"(from the Actual Spends Total row; per-model split isn't reliable in the sheet)")
+             f"(count of laptops actually purchased per the Actual Spends sheet)")
     L.append(f"- New laptops added to inventory this month: {bva['new_laptops_registered']}")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
     return "\n".join(L)
@@ -1267,7 +1267,7 @@ def get_laptop_spend(data: dict) -> dict:
     }
     abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
 
-    result = {"models": [], "total_joiners": 0, "total_spend": 0.0}
+    result = {"models": [], "total_joiners": 0, "units_this_month": 0, "total_spend": 0.0}
     total_row = None
     for row in data["actual_spend"]:
         # The row label (laptop model/category) is in the first column, whose
@@ -1282,22 +1282,28 @@ def get_laptop_spend(data: dict) -> dict:
         if not model_str or model_str in ("none",):
             continue
 
-        # Per-model: pull joiners for current month (individual spend values
-        # in this sheet are unreliable; use Total row below for actual INR)
+        # Per-model: joiners (people) and units actually purchased this month.
+        # The per-model "<month> Spend" cell is the QUANTITY of laptops bought
+        # that month (the actual money lives only in the Total row). Laptops
+        # purchased = sum of these per-model quantities, NOT the joiner counts.
         joiners = 0
+        units = 0
         for key, val in row.items():
             key_lower = str(key).strip().lower()
             for abbr in abbrevs:
-                if abbr in key_lower and "joiner" in key_lower:
-                    num = _to_number(val)
+                if abbr not in key_lower:
+                    continue
+                num = _to_number(val)
+                if "joiner" in key_lower:
                     joiners = int(num) if num is not None else 0
+                elif "spend" in key_lower:
+                    units = int(num) if num is not None else 0
 
         if joiners:
-            result["models"].append({
-                "model": str(model).strip(),
-                "joiners": joiners,
-            })
             result["total_joiners"] += joiners
+        if units:
+            result["models"].append({"model": str(model).strip(), "units": units})
+            result["units_this_month"] += units
 
     # Authoritative figures from the Total row (the per-model rows are unreliable).
     # Spend is INR → convert to USD; joiner count is taken as-is.
@@ -1488,7 +1494,7 @@ def get_budget_vs_actual(data: dict) -> dict:
         "laptop_monthly_budget": pace["monthly_planned"],
         "laptop_actual_this_month": pace["actual"],
         "laptop_pct_of_monthly": pace["pct_used"],
-        "laptops_this_month": ls.get("total_joiners", 0),
+        "laptops_this_month": ls.get("units_this_month", 0),
         "laptop_models": ls.get("models", []),
         "new_laptops_registered": len(get_purchases_this_month(data)),
         "software_this_month": get_software_spend_this_month(data),
