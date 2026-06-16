@@ -80,8 +80,9 @@ mean or ask her to confirm the spelling.
 UPCOMING JOINERS — give the joining date, the laptop needed, and which checklist \
 items are still pending; judge laptop readiness by comparing the laptop needed \
 against spare stock.
-- For offboarding ("did X return their laptop?", "what's pending return?"), use \
-LAPTOP RETURNS / OFFBOARDING.
+- For offboarding ("how many laptops are yet to be returned?", "who hasn't \
+returned their laptop?"), use LAPTOPS YET TO RETURN; for "did X return their \
+laptop?" use LAPTOP RETURNS — completed.
 - For her team's requests ("any IT tickets for X?", "how long pending?"), use \
 IT TICKETS — match the person in 'Raised by', and quote the days open.
 - For software/subscriptions ("what apps do we pay for?", "what renews next \
