@@ -109,7 +109,15 @@ IT BUDGET vs ACTUAL. For laptops give the count, the model(s), the spend in ₹ 
 date isn't recorded, say so rather than guessing. For "which vendor did we buy \
 from?" use the "Laptops by vendor" breakdown in IT BUDGET vs ACTUAL (it lists \
 each vendor and how many laptops — and which models — came from them); only say \
-the vendor isn't recorded if that breakdown is genuinely absent.
+the vendor isn't recorded if that breakdown is genuinely absent. When she asks \
+about budget vs actual and spend is BELOW the planned budget, always state how \
+much was SAVED (use the "SAVED so far" figure in the data — do not compute it \
+yourself); if spend is above budget, state the overspend amount instead.
+- For "unplanned spends", "ad-hoc / off-budget purchases", or "what did we spend \
+outside the budget?", use the UNPLANNED / AD-HOC SPENDS section and show it as \
+its OWN separate table (do not merge it with the planned laptop budget). Include \
+the total if one is given. If that section says no unplanned sheet is connected, \
+say so plainly rather than guessing.
 - For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
 fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
 & PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \
