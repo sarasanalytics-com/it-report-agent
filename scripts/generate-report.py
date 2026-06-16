@@ -1263,6 +1263,23 @@ def _bot_software_section(data: dict) -> str:
         planned_td = bva["laptop_monthly_inr"] * elapsed
         L.append(f"  • Planned for these {elapsed} months (₹monthly × {elapsed}): "
                  f"{fmt_inr_full(planned_td)}; actual {fmt_inr_full(hist['ytd_spend_inr'])}.")
+    # Which vendor each laptop was bought from — from the purchase register's
+    # 'Purchased From' column, so "from which vendor did we buy?" is answerable.
+    bv = get_purchases_by_vendor(data)
+    if bv["vendors"]:
+        rng = ""
+        if bv["date_from"] and bv["date_to"]:
+            rng = (f" ({bv['date_from'].strftime('%b %Y')}–"
+                   f"{bv['date_to'].strftime('%b %Y')})")
+        L.append(f"- Laptops by vendor (who we bought from), from the 'New Laptops "
+                 f"purchased' register{rng} — {bv['total']} laptop(s) total:")
+        for v in bv["vendors"]:
+            mdl = ", ".join(f"{m['model']} ×{m['units']}" for m in v["models"])
+            L.append(f"  • {v['vendor']}: {v['count']} laptop(s)"
+                     + (f" — {mdl}" if mdl else ""))
+        L.append("  NOTE: this register is the source for which vendor supplied each "
+                 "laptop; its laptop count may differ from the monthly spend tracker "
+                 "above because the two sheets are maintained separately.")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
     shist = get_software_spend_history(data)
     if shist["months"]:
@@ -1487,6 +1504,39 @@ def get_purchases_this_month(data: dict) -> list[dict]:
             })
     purchases.sort(key=lambda x: x["date"], reverse=True)
     return purchases
+
+
+def get_purchases_by_vendor(data: dict) -> dict:
+    """Laptops grouped by the vendor they were bought from, from the 'New Laptops
+    purchased' register's 'Purchased From' column. Lets the bot answer 'which
+    vendor did we buy from?'. Returns {vendors:[{vendor,count,models:[{model,
+    units}]}], total, date_from, date_to}."""
+    by_vendor: dict[str, dict] = {}
+    total = 0
+    dmin = dmax = None
+    for row in data.get("purchased", []):
+        brand = str(row.get("Brand", "") or "").strip()
+        model = str(row.get("Model", "") or "").strip()
+        serial = str(row.get("Serial no", "") or "").strip()
+        if not (brand or model or serial):
+            continue  # skip blank/spacer rows
+        vendor = str(row.get("Purchased From", "") or "").strip() or "Not recorded"
+        label = (f"{brand} {model}").strip() or model or brand or "—"
+        v = by_vendor.setdefault(vendor, {"count": 0, "models": {}})
+        v["count"] += 1
+        v["models"][label] = v["models"].get(label, 0) + 1
+        total += 1
+        d = parse_date(row.get("Warranty Start Date"))
+        if d:
+            dmin = d if dmin is None or d < dmin else dmin
+            dmax = d if dmax is None or d > dmax else dmax
+    vendors = []
+    for name, v in by_vendor.items():
+        models = [{"model": m, "units": u}
+                  for m, u in sorted(v["models"].items(), key=lambda x: -x[1])]
+        vendors.append({"vendor": name, "count": v["count"], "models": models})
+    vendors.sort(key=lambda x: -x["count"])
+    return {"vendors": vendors, "total": total, "date_from": dmin, "date_to": dmax}
 
 
 # Row names in spend tracker that are laptop/hardware costs, not app subscriptions
