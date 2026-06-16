@@ -433,8 +433,10 @@ def _load_unplanned_spends(wbs: list) -> dict:
     reinterpreted. Auto-detects any sheet whose name mentions 'unplanned'
     (also 'un-planned'/'unbudgeted'/'ad hoc'). Returns {sheet, headers, rows}."""
     def _is_unplanned(name: str) -> bool:
+        # Match the 'unplan' stem so common misspellings ('Unplaned', one n) and
+        # 'un-planned'/'unplanned' all hit; plus a few synonyms.
         n = name.strip().lower().replace("-", "").replace(" ", "")
-        return ("unplanned" in n or "unbudgeted" in n or "adhoc" in n
+        return ("unplan" in n or "unbudget" in n or "adhoc" in n
                 or "outofbudget" in n)
     for wb in wbs:
         try:
