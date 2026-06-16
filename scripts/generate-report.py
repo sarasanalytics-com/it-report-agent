@@ -1254,7 +1254,9 @@ def _bot_software_section(data: dict) -> str:
     if hist["months"]:
         L.append("- Laptop spend by month so far this year (FY26), ₹:")
         for m in hist["months"]:
-            L.append(f"  • {m['month']}: {m['units']} laptop(s), {fmt_inr_full(m['spend_inr'])}")
+            mdl = ", ".join(f"{x['model']} ×{x['units']}" for x in m.get("models", []))
+            L.append(f"  • {m['month']}: {m['units']} laptop(s), {fmt_inr_full(m['spend_inr'])}"
+                     + (f" ({mdl})" if mdl else ""))
         L.append(f"  • YTD total ({hist['months'][0]['month']}–{hist['months'][-1]['month']}): "
                  f"{hist['ytd_units']} laptop(s), {fmt_inr_full(hist['ytd_spend_inr'])}")
         elapsed = len(hist["months"])
@@ -1424,16 +1426,27 @@ def get_laptop_spend_history(data: dict) -> dict:
                 if abbr in kl and "spend" in kl:
                     spend = _to_number(v)
         units = 0
+        per_model = []
         for row in model_rows:
+            label = str(row.get("Model") or row.get("col_0", "") or "").strip()
             for k, v in row.items():
                 kl = str(k).strip().lower()
                 if abbr in kl and "spend" in kl:
                     n = _to_number(v)
-                    units += int(n) if n is not None else 0
-        months.append({"month": disp, "units": units, "spend_inr": spend or 0.0})
+                    if n:
+                        units += int(n)
+                        per_model.append({"model": label, "units": int(n)})
+        months.append({"month": disp, "units": units, "spend_inr": spend or 0.0,
+                       "models": per_model})
         ytd_units += units
         ytd_spend += spend or 0.0
     return {"months": months, "ytd_units": ytd_units, "ytd_spend_inr": ytd_spend}
+
+
+def get_recent_purchases(data: dict, days: int = 30) -> list[dict]:
+    """Get laptops purchased within the given number of past days (up to today)."""
+    cutoff = TODAY - timedelta(days=days)
+    purchases = []
     for row in data["purchased"]:
         d = parse_date(row.get("Warranty Start Date"))
         if d and cutoff <= d <= TODAY:
@@ -2449,11 +2462,12 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
     hist = bva["spend_history"]
     if hist["months"]:
         L.append("\n**Laptop spend by month (FY26 to date)**\n")
-        L.append("| Month | Laptops | Spend (₹) |")
-        L.append("|---|---|---|")
+        L.append("| Month | Laptops | Models | Spend (₹) |")
+        L.append("|---|---|---|---|")
         for m in hist["months"]:
-            L.append(f"| {m['month']} | {m['units']} | {fmt_inr_full(m['spend_inr'])} |")
-        L.append(f"| **YTD total** | **{hist['ytd_units']}** | **{fmt_inr_full(hist['ytd_spend_inr'])}** |")
+            mdl = ", ".join(f"{x['model']} ×{x['units']}" for x in m.get("models", [])) or "—"
+            L.append(f"| {m['month']} | {m['units']} | {mdl} | {fmt_inr_full(m['spend_inr'])} |")
+        L.append(f"| **YTD total** | **{hist['ytd_units']}** | | **{fmt_inr_full(hist['ytd_spend_inr'])}** |")
 
     # 10. Laptop delivery lead times by vendor
     options = get_delivery_options(data)
