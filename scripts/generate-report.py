@@ -1274,15 +1274,21 @@ def _bot_software_section(data: dict) -> str:
 
 
 def _bot_joiners_history_section(data: dict) -> str:
-    """Headcount joined per month this year (for 'how many joined this year/in May?')."""
+    """New joiners + laptop assignments (new-joiner vs replacement) per month."""
     h = get_joiners_history(data)
-    L = [f"# NEW JOINERS THIS YEAR ({h['ytd']} so far)",
-         "How many people joined each month this year (by confirmed joining date). "
-         "Use for 'how many joined this year / in <month>?'.\n",
-         "| Month | Joined |", "|---|---|"]
+    a = get_assignment_history(data)
+    by_m = {x["month"]: x for x in a["months"]}
+    L = [f"# NEW JOINERS & LAPTOP REPLACEMENTS THIS YEAR",
+         f"People joined (from the joiners sheet) and laptops assigned each month, "
+         f"split into new-joiner vs replacement (from the asset history). "
+         f"YTD: {h['ytd']} joined, {a['ytd_new_joiner']} new-joiner laptops, "
+         f"{a['ytd_replacement']} replacement laptops.\n",
+         "| Month | People joined | New-joiner laptops | Replacements |",
+         "|---|---|---|---|"]
     for m in h["months"]:
-        L.append(f"| {m['month']} | {m['count']} |")
-    L.append(f"| **YTD** | **{h['ytd']}** |")
+        am = by_m.get(m["month"], {"new_joiner": 0, "replacement": 0})
+        L.append(f"| {m['month']} | {m['count']} | {am['new_joiner']} | {am['replacement']} |")
+    L.append(f"| **YTD** | **{h['ytd']}** | **{a['ytd_new_joiner']}** | **{a['ytd_replacement']}** |")
     return "\n".join(L)
 
 
@@ -1616,6 +1622,31 @@ def get_joiners_history(data: dict) -> dict:
         months.append({"month": dt.date(TODAY.year, m, 1).strftime("%b"), "count": c})
         ytd += c
     return {"months": months, "ytd": ytd}
+
+
+def get_assignment_history(data: dict) -> dict:
+    """Laptop assignments per month this year, split into new-joiner vs
+    replacement, from the Asset History sheet (Assigned Date + the
+    'New Joiner/Replacement' column). {months:[{month,new_joiner,replacement}],
+    ytd_new_joiner, ytd_replacement}."""
+    by_month: dict[int, dict] = defaultdict(lambda: {"new_joiner": 0, "replacement": 0})
+    for row in data.get("history", []):
+        d = parse_date(row.get("Assigned Date"))
+        if not d or d.year != TODAY.year or d > TODAY:
+            continue
+        typ = str(row.get("New Joiner/Replacement", "") or "").strip().lower()
+        if "replace" in typ:
+            by_month[d.month]["replacement"] += 1
+        elif "joiner" in typ or "new" in typ:
+            by_month[d.month]["new_joiner"] += 1
+    months, nj, rep = [], 0, 0
+    for m in range(1, TODAY.month + 1):
+        b = by_month.get(m, {"new_joiner": 0, "replacement": 0})
+        months.append({"month": dt.date(TODAY.year, m, 1).strftime("%b"),
+                       "new_joiner": b["new_joiner"], "replacement": b["replacement"]})
+        nj += b["new_joiner"]
+        rep += b["replacement"]
+    return {"months": months, "ytd_new_joiner": nj, "ytd_replacement": rep}
 
 
 def get_software_inventory(data: dict) -> list[dict]:

@@ -77,12 +77,14 @@ Never attribute a recommendation to a person/team that isn't in the data (e.g. \
 don't say "the IT team recommends…"). NEVER invent anything: if a specific \
 detail isn't in the data, say it's not recorded rather than guessing or omitting \
 it silently.
-- When the answer compares several items across columns (delivery lead times by \
-vendor, a list of apps with costs, laptops by person, etc.), present it as a \
-TABLE inside a ``` triple-backtick code block ``` with aligned, space-padded \
-columns and a header row. Slack does NOT render markdown pipe tables, so always \
-use a code block for tables — never bare '|' rows. Keep columns narrow so it \
-fits on a phone.
+- When the answer compares several items across columns, present it as a TABLE \
+inside a ``` triple-backtick code block ``` with aligned, space-padded columns \
+and a header row. Slack does NOT render markdown pipe tables, so always use a \
+code block — never bare '|' rows. Keep it SIMPLE and phone-friendly: at most ~4 \
+columns, short one-word headers, and do NOT add running-total / cumulative \
+columns (e.g. 'YTD so far' next to each row) unless she asks — put any total in a \
+single final row instead. One small table per topic; split topics into separate \
+tables rather than one wide one.
 - For a new-joiner question, give a clear *Yes / Not yet* on whether a laptop \
 is ready, plus the joining date.
 - For a person question ("what laptop does X have", "is X's laptop old?"), use \
