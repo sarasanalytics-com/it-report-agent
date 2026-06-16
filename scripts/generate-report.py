@@ -238,8 +238,9 @@ def load_data() -> dict:
     # data/vendor_payments.xlsx by scripts/fetch-excel.py. First sheet is read.
     data["vendor"] = _load_vendor_payments()
 
-    # Laptop delivery lead-times by vendor (optional table in the budget book).
+    # Laptop delivery lead-times + vendor payment terms (optional budget tables).
     data["delivery"] = _load_delivery_timelines(proc_wb)
+    data["payment_terms"] = _load_payment_terms(proc_wb)
 
     for wb in (asset_wb, spend_wb, proc_wb, join_wb):
         wb.close()
@@ -351,7 +352,12 @@ def _load_delivery_timelines(proc_wb) -> dict:
             rows = []
             for raw in ws.iter_rows(min_row=hdr_idx + 2, values_only=True):
                 if all(c is None for c in raw):
+                    if rows:  # blank row ends the table (e.g. payment-terms below)
+                        break
                     continue
+                device = str(raw[0] if raw else "" or "").strip()
+                if "payment term" in device.lower():  # another table starts here
+                    break
                 rec = {headers[j]: raw[j] for j in range(min(len(headers), len(raw)))}
                 if str(rec.get("Device Type", "") or "").strip():
                     rows.append(rec)
@@ -362,6 +368,41 @@ def _load_delivery_timelines(proc_wb) -> dict:
     except Exception as exc:  # never break the report over this optional table
         print(f"  Warning: could not read delivery timelines: {exc}", file=sys.stderr)
     return {"headers": [], "rows": []}
+
+
+def _load_payment_terms(proc_wb) -> dict:
+    """Vendor → payment terms, from a 'Payment terms' row in the budget workbook
+    (header cell 'Payment terms' followed by vendor columns; the next row holds
+    each vendor's terms). Returns {vendor: terms} (empty if not present)."""
+    try:
+        for sheet in proc_wb.sheetnames:
+            ws = proc_wb[sheet]
+            rows = list(ws.iter_rows(min_row=1, max_row=60, values_only=True))
+            for i, raw in enumerate(rows):
+                cells = [str(c).strip() if c is not None else "" for c in raw]
+                lower = [c.lower() for c in cells]
+                pt_idx = next((j for j, c in enumerate(lower) if "payment term" in c), None)
+                if pt_idx is None:
+                    continue
+                vendor_cols = {j: cells[j] for j in range(len(cells))
+                               if j != pt_idx and cells[j]}
+                if not vendor_cols:
+                    continue
+                for raw2 in rows[i + 1:]:
+                    c2 = [str(c).strip() if c is not None else "" for c in raw2]
+                    terms = {v: c2[j] for j, v in vendor_cols.items() if j < len(c2) and c2[j]}
+                    if terms:
+                        print(f"  Payment terms: sheet '{sheet}', {len(terms)} vendor(s)")
+                        return terms
+    except Exception as exc:
+        print(f"  Warning: could not read payment terms: {exc}", file=sys.stderr)
+    return {}
+
+
+def get_payment_terms(data: dict) -> dict:
+    """Cleaned {vendor: payment terms} mapping."""
+    return {str(k).strip(): " ".join(str(v).split())
+            for k, v in (data.get("payment_terms") or {}).items() if str(v).strip()}
 
 
 def _leadtime_to_days(text) -> Optional[int]:
@@ -990,6 +1031,13 @@ def _bot_delivery_section(data: dict) -> str:
         fastest = f"{o['fastest']['vendor']} ({o['fastest']['text']})" if o["fastest"] else "—"
         allv = ", ".join(f"{v['vendor']}: {v['text']}" for v in o["vendors"]) or "—"
         L.append(f"| {o['device']} | {o['departments'] or '—'} | {fastest} | {allv} |")
+    terms = get_payment_terms(data)
+    if terms:
+        L.append("\n## VENDOR PAYMENT TERMS")
+        L.append("| Vendor | Payment terms |")
+        L.append("|---|---|")
+        for vendor, term in terms.items():
+            L.append(f"| {vendor} | {term} |")
     return "\n".join(L)
 
 
@@ -2156,6 +2204,13 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
                        if o['fastest'] else "—")
             allv = ", ".join(f"{v['vendor']}: {v['text']}" for v in o["vendors"]) or "—"
             L.append(f"| {o['device']} | {o['departments'] or '—'} | {fastest} | {allv} |")
+        terms = get_payment_terms(data)
+        if terms:
+            L.append("\n**Vendor payment terms**\n")
+            L.append("| Vendor | Payment terms |")
+            L.append("|---|---|")
+            for vendor, term in terms.items():
+                L.append(f"| {vendor} | {term} |")
 
     L.append(f"\n---\n{_fx_footnote()}")
     L.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
