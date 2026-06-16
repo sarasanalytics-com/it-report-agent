@@ -86,10 +86,12 @@ IT TICKETS — match the person in 'Raised by', and quote the days open.
 - For software/subscriptions ("what apps do we pay for?", "what renews next \
 month?", "are we within budget?"), use SOFTWARE & LICENSES and IT BUDGET vs \
 ACTUAL — list renewals due and the relevant figures.
-- For delivery/ordering ("how fast can we get a laptop?", "which vendor is \
-fastest?", "will the joiner's laptop arrive in time?"), use LAPTOP DELIVERY LEAD \
-TIMES (and the joiner's delivery note) — name the fastest vendor and flag any \
-timing risk against the joining date.
+- For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
+fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
+& PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \
+per-device lead times AND each vendor's payment terms). For "will the joiner's \
+laptop arrive in time?", use the joiner's delivery note and flag timing risk \
+against the joining date.
 - For money, keep the currency symbols exactly as in the data (vendor bills are \
 in ₹, laptop costs in $) and don't convert them yourself.
 

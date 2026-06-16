@@ -456,6 +456,42 @@ def get_fastest_delivery_for_department(data: dict, department: str) -> Optional
     return best
 
 
+def _short_device(name) -> str:
+    s = str(name or "").strip()
+    for pre in ("Apple ", "Windows Laptop ", "Windows ", "Laptop "):
+        if s.startswith(pre):
+            s = s[len(pre):]
+    return s.strip() or str(name or "").strip()
+
+
+def get_vendor_delivery_matrix(data: dict) -> dict:
+    """Vendor-centric pivot: each vendor's delivery lead time per device plus its
+    payment terms. Returns {devices: [short names], rows: [{vendor, cells, terms,
+    min_days}]} ordered fastest-first."""
+    options = get_delivery_options(data)
+    terms = get_payment_terms(data)
+    devices = [_short_device(o["device"]) for o in options]
+    vendors, cell, days = [], {}, {}
+    for o in options:
+        short = _short_device(o["device"])
+        for v in o["vendors"]:
+            if v["vendor"] not in vendors:
+                vendors.append(v["vendor"])
+            cell[(v["vendor"], short)] = v["text"]
+            if v["days"] is not None:
+                days.setdefault(v["vendor"], []).append(v["days"])
+    rows = []
+    for vendor in vendors:
+        rows.append({
+            "vendor": vendor,
+            "cells": [cell.get((vendor, d), "—") for d in devices],
+            "terms": terms.get(vendor, "—"),
+            "min_days": min(days.get(vendor, [9999])),
+        })
+    rows.sort(key=lambda r: r["min_days"])
+    return {"devices": devices, "rows": rows}
+
+
 def _load_it_issues(asset_wb) -> list[dict]:
     """Load IT issues from data/it_issues.xlsx if present, else the asset
     workbook's optional 'IT Issues' sheet, else []."""
@@ -1019,25 +1055,19 @@ def _bot_joiners_section(data: dict) -> str:
 
 
 def _bot_delivery_section(data: dict) -> str:
-    """Laptop delivery lead-times by vendor (for 'how fast can we get a laptop?')."""
-    options = get_delivery_options(data)
-    if not options:
-        return "# LAPTOP DELIVERY LEAD TIMES\nNo delivery-timeline table found."
-    L = ["# LAPTOP DELIVERY LEAD TIMES",
-         "How fast each vendor delivers each device. Use for 'how quickly can we "
-         "get a [device]?' and 'which vendor is fastest?'.\n",
-         "| Device | For (depts) | Fastest | All vendors |", "|---|---|---|---|"]
-    for o in options:
-        fastest = f"{o['fastest']['vendor']} ({o['fastest']['text']})" if o["fastest"] else "—"
-        allv = ", ".join(f"{v['vendor']}: {v['text']}" for v in o["vendors"]) or "—"
-        L.append(f"| {o['device']} | {o['departments'] or '—'} | {fastest} | {allv} |")
-    terms = get_payment_terms(data)
-    if terms:
-        L.append("\n## VENDOR PAYMENT TERMS")
-        L.append("| Vendor | Payment terms |")
-        L.append("|---|---|")
-        for vendor, term in terms.items():
-            L.append(f"| {vendor} | {term} |")
+    """Combined vendor delivery + payment-terms table — the single table to show
+    for 'laptop delivery timelines from vendors'."""
+    matrix = get_vendor_delivery_matrix(data)
+    if not matrix["rows"]:
+        return "# LAPTOP DELIVERY & PAYMENT TERMS\nNo delivery-timeline table found."
+    cols = " | ".join(matrix["devices"])
+    L = ["# LAPTOP DELIVERY & PAYMENT TERMS (by vendor)",
+         "When asked about delivery timelines/vendors, show THIS as one table "
+         "(vendors fastest-first), with both the per-device lead time and payment terms.\n",
+         f"| Vendor | {cols} | Payment terms |",
+         "|" + "---|" * (len(matrix["devices"]) + 2)]
+    for r in matrix["rows"]:
+        L.append("| " + " | ".join([r["vendor"], *r["cells"], r["terms"]]) + " |")
     return "\n".join(L)
 
 
@@ -2211,6 +2241,15 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
             L.append("|---|---|")
             for vendor, term in terms.items():
                 L.append(f"| {vendor} | {term} |")
+
+        # Combined view: vendors (fastest first) × device lead time + payment terms
+        matrix = get_vendor_delivery_matrix(data)
+        if matrix["rows"]:
+            L.append("\n**By vendor — delivery + payment terms**\n")
+            L.append(f"| Vendor | {' | '.join(matrix['devices'])} | Payment terms |")
+            L.append("|" + "---|" * (len(matrix["devices"]) + 2))
+            for r in matrix["rows"]:
+                L.append("| " + " | ".join([r["vendor"], *r["cells"], r["terms"]]) + " |")
 
     L.append(f"\n---\n{_fx_footnote()}")
     L.append(f"\n_Generated: {TODAY.strftime('%d %B %Y')}_")
