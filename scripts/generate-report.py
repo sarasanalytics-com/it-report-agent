@@ -859,26 +859,28 @@ def get_spend_pace(data: dict) -> dict:
 
     # The plan sheet has individual line items AND summary rows ('Total Estimated
     # Cost', 'Laptop (Exit Employees)', 'Final Estimated Cost'). The authoritative
-    # FY plan is the 'Final Estimated Cost' row (line items minus reusable exit
-    # laptops) — NOT the sum of every Total Price cell (which would multi-count).
+    # annual budget is the 'Total Estimated Cost' row (the planned figure). We do
+    # NOT use 'Final Estimated Cost' — that row now folds in unplanned/ad-hoc
+    # spend — nor the raw sum of every Total Price cell (which would multi-count).
     final_cost = total_est = None
     line_sum = 0.0
     for row in data.get("proc_plan", []):
         label = " ".join(" ".join(str(v).split()) for v in row.values()
                           if isinstance(v, str)).lower()
         tp = _to_number(row.get("Total Price (INR)"))
-        if "final estimated cost" in label:
-            if tp is not None:
-                final_cost = tp
-        elif "total estimated cost" in label or "estimated cost" in label:
+        if "total estimated cost" in label:
             if tp is not None:
                 total_est = tp
-        elif tp is not None and "exit" not in label:
+        elif "final estimated cost" in label:
+            if tp is not None:
+                final_cost = tp
+        elif (tp is not None and "exit" not in label
+              and "unplan" not in label and "estimated cost" not in label):
             line_sum += tp
-    if final_cost is not None:
-        planned_inr = final_cost
-    elif total_est is not None:
+    if total_est is not None:
         planned_inr = total_est
+    elif final_cost is not None:
+        planned_inr = final_cost
     else:
         planned_inr = line_sum
 
