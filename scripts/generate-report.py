@@ -1204,9 +1204,11 @@ def _bot_software_section(data: dict) -> str:
     if not renewals:
         L.append("- None.")
     L.append("\n## IT BUDGET vs ACTUAL")
-    L.append(f"- Laptop procurement annual budget: {fmt_usd(bva['laptop_annual_budget'])} "
-             f"(≈ {fmt_usd(bva['laptop_monthly_budget'])}/month)")
-    pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of this month's budget"
+    L.append(f"- Planned laptop procurement (from the 'Laptop procurement plan' sheet): "
+             f"{fmt_usd(bva['laptop_annual_budget'])} for the year, i.e. about "
+             f"{fmt_usd(bva['laptop_monthly_budget'])}/month. NOTE: this 'monthly' figure "
+             f"is the planned annual total ÷ 12 — it is NOT a separately-approved budget.")
+    pct = (f" — {bva['laptop_pct_of_monthly']:.0f}% of that planned monthly amount"
            if bva['laptop_pct_of_monthly'] is not None else "")
     models = ", ".join(f"{m['model']} ×{m['units']}" for m in bva["laptop_models"])
     L.append(f"- Laptops procured this month: {bva['laptops_this_month']}"
@@ -2280,14 +2282,15 @@ def build_report_full(data: dict, prev_snap: Optional[dict], period: str) -> str
 
     # 9. IT budget vs actual
     bva = get_budget_vs_actual(data)
-    L.append("\n## 9. IT Budget vs Actual\n")
+    L.append("\n## 9. Laptop Procurement: Plan vs Actual\n")
+    L.append("_'Planned per month' is the procurement-plan annual total ÷ 12, not a separately-approved budget._\n")
     L.append("| Item | Amount |")
     L.append("|---|---|")
-    L.append(f"| Laptop procurement — annual budget | {fmt_usd(bva['laptop_annual_budget'])} |")
-    L.append(f"| Laptop procurement — monthly budget | {fmt_usd(bva['laptop_monthly_budget'])} |")
+    L.append(f"| Planned laptop procurement — annual (procurement plan) | {fmt_usd(bva['laptop_annual_budget'])} |")
+    L.append(f"| Planned laptop procurement — per month (annual ÷ 12) | {fmt_usd(bva['laptop_monthly_budget'])} |")
     L.append(f"| Laptop spend — this month | {fmt_inr_full(bva['laptop_spend_inr'])} "
              f"({fmt_usd(bva['laptop_actual_this_month'])})"
-             + (f", {bva['laptop_pct_of_monthly']:.0f}% of monthly budget"
+             + (f", {bva['laptop_pct_of_monthly']:.0f}% of planned monthly"
                 if bva['laptop_pct_of_monthly'] is not None else "") + " |")
     laptop_models = ", ".join(f"{m['model']} ×{m['units']}" for m in bva["laptop_models"])
     L.append(f"| Laptops procured — this month | {bva['laptops_this_month']}"
