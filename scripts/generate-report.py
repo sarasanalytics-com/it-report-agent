@@ -221,7 +221,10 @@ def load_data() -> dict:
         "docking": read_sheet(asset_wb, "Docking station"),
         "monitor": read_sheet(asset_wb, "Monitor"),
         "other_stock": read_sheet(asset_wb, "Other Assets Instock"),
-        "spend": read_sheet(spend_wb, "Sheet1"),
+        # Main subscriptions sheet + the extra 'Linkdin Growth Team' apps so the
+        # software total/inventory is complete.
+        "spend": (read_sheet(spend_wb, "Sheet1")
+                  + read_sheet(spend_wb, "Linkdin Growth Team")),
         "joinings": read_sheet(join_wb, "Joinings"),
         "checklist": read_sheet(join_wb, "Joining checklist"),
         "proc_plan": read_sheet(proc_wb, "Laptop procurement plan", header_row=2),
@@ -1238,6 +1241,25 @@ def _bot_software_section(data: dict) -> str:
         L.append(f"  • Planned for these {elapsed} months (₹monthly × {elapsed}): "
                  f"{fmt_inr_full(planned_td)}; actual {fmt_inr_full(hist['ytd_spend_inr'])}.")
     L.append(f"- Software & licenses this month: {fmt_usd(bva['software_this_month'])}")
+    shist = get_software_spend_history(data)
+    if shist["months"]:
+        L.append("- Software/subscription spend by month so far this year ($):")
+        for m in shist["months"]:
+            L.append(f"  • {m['month']}: {fmt_usd(m['spend'])}")
+        L.append(f"  • YTD total: {fmt_usd(shist['ytd'])}")
+    return "\n".join(L)
+
+
+def _bot_joiners_history_section(data: dict) -> str:
+    """Headcount joined per month this year (for 'how many joined this year/in May?')."""
+    h = get_joiners_history(data)
+    L = [f"# NEW JOINERS THIS YEAR ({h['ytd']} so far)",
+         "How many people joined each month this year (by confirmed joining date). "
+         "Use for 'how many joined this year / in <month>?'.\n",
+         "| Month | Joined |", "|---|---|"]
+    for m in h["months"]:
+        L.append(f"| {m['month']} | {m['count']} |")
+    L.append(f"| **YTD** | **{h['ytd']}** |")
     return "\n".join(L)
 
 
@@ -1248,6 +1270,7 @@ def build_bot_context(data: dict) -> str:
     return "\n\n".join([
         build_employee_directory(data),
         _bot_joiners_section(data),
+        _bot_joiners_history_section(data),
         _bot_returns_section(data),
         _bot_peripherals_section(data),
         _bot_tickets_section(data),
@@ -1517,6 +1540,48 @@ def get_software_spend_this_month(data: dict) -> float:
                 line_items += 1
     _spend_diagnostic_once(data, month_key, is_current, total, line_items)
     return total
+
+
+def get_software_spend_history(data: dict) -> dict:
+    """Month-by-month software/subscription spend this year (sum of named line
+    items per month column), up to the current month. {months, ytd}."""
+    cols = {}
+    for row in data["spend"]:
+        for k in row:
+            d = parse_date(k)
+            if d:
+                cols[k] = d
+    months, ytd = [], 0.0
+    for key, d in sorted(cols.items(), key=lambda kv: kv[1]):
+        if d.year != TODAY.year or d.month > TODAY.month:
+            continue
+        total = 0.0
+        for row in data["spend"]:
+            name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
+            if not name or _is_total_row(row):
+                continue
+            v = _to_number(row.get(key))
+            if v is not None:
+                total += v
+        months.append({"month": d.strftime("%b"), "spend": total})
+        ytd += total
+    return {"months": months, "ytd": ytd}
+
+
+def get_joiners_history(data: dict) -> dict:
+    """Headcount that joined each month this year (by Confirm DOJ), up to the
+    current month. {months:[{month,count}], ytd}."""
+    by_month: dict[int, int] = defaultdict(int)
+    for row in data.get("joinings", []):
+        d = parse_date(row.get("Confirm DOJ") or row.get("DOJ As per Offer letter"))
+        if d and d.year == TODAY.year and d <= TODAY:
+            by_month[d.month] += 1
+    months, ytd = [], 0
+    for m in range(1, TODAY.month + 1):
+        c = by_month.get(m, 0)
+        months.append({"month": dt.date(TODAY.year, m, 1).strftime("%b"), "count": c})
+        ytd += c
+    return {"months": months, "ytd": ytd}
 
 
 def get_software_inventory(data: dict) -> list[dict]:
