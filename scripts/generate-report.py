@@ -1523,6 +1523,73 @@ def _bot_unplanned_section(data: dict) -> str:
     return "\n".join(L)
 
 
+def _rows_to_table(rows: list[dict], max_rows: int = 80) -> list[str]:
+    """Render arbitrary sheet rows verbatim as a markdown table. Keeps only
+    columns that have a real header OR carry data (blank-header columns become
+    'Item'), drops fully-empty rows, and caps the row count. Used to surface
+    tabs whose exact columns we don't want to reinterpret."""
+    rows = [r for r in rows
+            if any(str(v).strip() for v in r.values() if v is not None)]
+    if not rows:
+        return []
+    cols: list = []
+    for r in rows:
+        for k in r.keys():
+            if k not in cols:
+                cols.append(k)
+    keep = [c for c in cols
+            if not str(c).startswith("col_")
+            or any(str(r.get(c) or "").strip() for r in rows)]
+
+    def _cell(v):
+        if v is None or str(v).strip() == "":
+            return "—"
+        if isinstance(v, (dt.datetime, dt.date)):
+            return v.strftime("%d %b %Y")
+        return " ".join(str(v).split()).replace("|", "/")
+
+    hdr = ["Item" if str(c).startswith("col_") else str(c) for c in keep]
+    lines = ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(keep)]
+    for r in rows[:max_rows]:
+        lines.append("| " + " | ".join(_cell(r.get(c)) for c in keep) + " |")
+    if len(rows) > max_rows:
+        lines.append(f"\n(+{len(rows) - max_rows} more row(s) not shown.)")
+    return lines
+
+
+def _bot_sold_section(data: dict) -> str:
+    """Laptops sold / disposed (retired from the company), reproduced verbatim
+    from the 'Laptops sold' tab. Answers 'have we sold any laptops?'."""
+    rows = data.get("sold", [])
+    body = _rows_to_table(rows)
+    L = [f"# LAPTOPS SOLD / DISPOSED ({len([1 for r in rows if any(str(v).strip() for v in r.values() if v is not None)])})",
+         "Laptops that have been sold or disposed of (retired from use). Use for "
+         "'have we sold any laptops?', 'which laptops were disposed/retired?'. "
+         "These are company-owned laptops we let go of — NOT sales to customers."]
+    if not body:
+        L.append("\nNo laptops are recorded as sold or disposed in the current data.")
+        return "\n".join(L)
+    L.append("")
+    L.extend(body)
+    return "\n".join(L)
+
+
+def _bot_other_stock_section(data: dict) -> str:
+    """Non-laptop spare assets in stock (USB hubs, adapters, etc.) with their
+    quantities, from the 'Other Assets Instock' tab."""
+    rows = data.get("other_stock", [])
+    body = _rows_to_table(rows)
+    L = ["# OTHER ASSETS IN STOCK",
+         "Spare non-laptop assets held in stock (e.g. USB hubs, adapters, cables) "
+         "with quantities. Use for 'how many spare <item> do we have?'."]
+    if not body:
+        L.append("\nNo other-asset stock is recorded.")
+        return "\n".join(L)
+    L.append("")
+    L.extend(body)
+    return "\n".join(L)
+
+
 def build_bot_context(data: dict) -> str:
     """Full context for the IT Helper bot — everything an HR head asks about,
     beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
@@ -1537,6 +1604,8 @@ def build_bot_context(data: dict) -> str:
         _bot_software_section(data),
         _bot_unplanned_section(data),
         _bot_delivery_section(data),
+        _bot_sold_section(data),
+        _bot_other_stock_section(data),
     ])
 
 
