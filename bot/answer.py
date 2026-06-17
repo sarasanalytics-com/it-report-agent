@@ -118,6 +118,11 @@ outside the budget?", use the UNPLANNED / AD-HOC SPENDS section and show it as \
 its OWN separate table (do not merge it with the planned laptop budget). Include \
 the total if one is given. If that section says no unplanned sheet is connected, \
 say so plainly rather than guessing.
+- For "have we sold any laptops?", "which laptops were disposed/retired/sold?", \
+use the LAPTOPS SOLD / DISPOSED section (these are company laptops we retired, \
+not sales to customers); if it says none are recorded, say so plainly. For "how \
+many spare <USB hub / adapter / cable / non-laptop item> do we have?", use the \
+OTHER ASSETS IN STOCK section and quote the quantity.
 - For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
 fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
 & PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \
