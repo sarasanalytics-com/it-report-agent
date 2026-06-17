@@ -9,6 +9,10 @@ features:
   bot_user:
     display_name: IT Helper
     always_online: true
+  app_home:
+    home_tab_enabled: true          # one-pager "what I can help with" view
+    messages_tab_enabled: true       # let people DM the bot from its profile
+    messages_tab_read_only_enabled: false
 oauth_config:
   scopes:
     bot:
@@ -22,6 +26,7 @@ settings:
     bot_events:
       - app_mention         # @mentioned in a channel
       - message.im          # direct message to the bot
+      - app_home_opened     # someone opened the bot's Home tab
   interactivity:
     is_enabled: false
   org_deploy_enabled: false

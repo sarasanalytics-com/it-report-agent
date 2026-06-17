@@ -43,6 +43,12 @@ The bot answers in simple, non-technical language and only from the latest data.
    **Bot User OAuth Token** `xoxb-…` → `SLACK_BOT_TOKEN`.
 5. Invite the bot to a channel (`/invite @IT Helper`) and/or just DM it.
 
+> Already created the app before the Home tab was added? Open the app at
+> <https://api.slack.com/apps> → **App Manifest**, paste the latest
+> [`bot/manifest.yaml`](./manifest.yaml), save, then **reinstall** the app. The
+> bot publishes its "what I can help with" one-pager on the **Home tab** the
+> next time someone opens it (restart the running bot so the new handler loads).
+
 ### 2. Configure env
 ```bash
 cp bot/.env.example bot/.env

@@ -62,6 +62,61 @@ WELCOME = (
 )
 
 
+# One-pager shown on the bot's Home tab (the screen you see when you open the
+# app). Plain-language, phone-friendly, grouped by what the HR head asks about.
+def _home_view() -> dict:
+    def sec(text: str) -> dict:
+        return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+    blocks = [
+        {"type": "header",
+         "text": {"type": "plain_text", "text": "👋 Meet your IT Helper", "emoji": True}},
+        sec("I answer your questions about company laptops, new-joiner readiness, "
+            "IT requests and spending — in plain English. Just *send me a message* "
+            "here, or *@mention* me in a channel. Here's what I can help with:"),
+        {"type": "divider"},
+        sec("*🧑‍💻 New joiners & laptop readiness*\n"
+            "• _Will the new joiners have laptops ready?_\n"
+            "• _Is <name> ready to start — what's still pending?_\n"
+            "• _Who's joining in the next few weeks?_"),
+        sec("*💻 Laptops & stock*\n"
+            "• _How many spare laptops do we have right now?_\n"
+            "• _What models are in our spare stock?_\n"
+            "• _How many old / backup laptops do we have?_\n"
+            "• _Which laptops are due for replacement?_"),
+        sec("*👤 A specific person*\n"
+            "• _What laptop does <name> have? Is it old?_\n"
+            "• _Does <name> have a monitor / headset?_"),
+        sec("*📦 Returns & offboarding*\n"
+            "• _How many laptops are yet to be returned?_\n"
+            "• _Did <name> return their laptop?_"),
+        sec("*🎫 IT requests*\n"
+            "• _What IT requests are open right now?_\n"
+            "• _Any IT tickets for <name>? How long have they been pending?_"),
+        sec("*💰 Spending & budget*\n"
+            "• _How much did we spend on software this month?_\n"
+            "• _Are we within the laptop budget? How much have we saved?_\n"
+            "• _What did we spend outside the budget (unplanned)?_\n"
+            "• _What subscriptions renew next month?_"),
+        sec("*🚚 Buying, vendors & delivery*\n"
+            "• _Which laptops did we buy this month — model, cost, vendor?_\n"
+            "• _How fast can we get a laptop, and from which vendor?_\n"
+            "• _What's the standard laptop for a <role/department>?_\n"
+            "• _Have we sold or disposed of any laptops?_"),
+        {"type": "divider"},
+        sec("*Handy shortcuts*\n"
+            "• Just edited a sheet? Say *refresh* and I'll pull the latest numbers.\n"
+            "• Want the full IT report? Say *send me the report*.\n"
+            "• Not sure how to word it? Just type your question in normal English — "
+            "I'll figure it out."),
+        {"type": "context",
+         "elements": [{"type": "mrkdwn",
+                       "text": ":lock: I only share what's in the IT data and I never "
+                               "guess — if something isn't recorded, I'll tell you."}]},
+    ]
+    return {"type": "home", "blocks": blocks}
+
+
 def _clean(text: str | None) -> str:
     return _MENTION_RE.sub("", text or "").strip()
 
@@ -147,6 +202,17 @@ def _guard(event, say) -> bool:
     log.info("Denied request from user %s (not on allowlist)", event.get("user"))
     say(text=DENY_MESSAGE, thread_ts=event.get("thread_ts") or event.get("ts"))
     return False
+
+
+@app.event("app_home_opened")
+def handle_home_opened(event, client):
+    """Publish the one-pager 'what I can help with' view on the Home tab."""
+    if event.get("tab") and event.get("tab") != "home":
+        return  # ignore the Messages tab open
+    try:
+        client.views_publish(user_id=event["user"], view=_home_view())
+    except Exception:  # noqa: BLE001 - never let a Home render crash the bot
+        log.exception("Failed to publish Home tab for %s", event.get("user"))
 
 
 @app.event("app_mention")
