@@ -123,6 +123,11 @@ use the LAPTOPS SOLD / DISPOSED section (these are company laptops we retired, \
 not sales to customers); if it says none are recorded, say so plainly. For "how \
 many spare <USB hub / adapter / cable / non-laptop item> do we have?", use the \
 OTHER ASSETS IN STOCK section and quote the quantity.
+- For "how many backup / old / standby laptops do we have?" or "which models are \
+in the backup pool?", use the BACKUP / SPARE LAPTOPS section (these are the older \
+3+ year spare machines, separate from the main ready stock). For "what laptop / \
+spec does a <role or department> get as standard?", use the STANDARD LAPTOP \
+CONFIGURATIONS section. If either section says none are recorded, say so plainly.
 - For delivery/vendor questions ("laptop delivery timelines from vendors", "how \
 fast can we get a laptop?", "which vendor is fastest?"), show the LAPTOP DELIVERY \
 & PAYMENT TERMS table as ONE code-block table (vendors fastest-first, with the \
