@@ -1590,6 +1590,42 @@ def _bot_other_stock_section(data: dict) -> str:
     return "\n".join(L)
 
 
+def _bot_backup_section(data: dict) -> str:
+    """Backup / spare laptops from the '3 years old' pool — older standby
+    machines, surfaced with make/model/config so 'which backup laptops do we
+    have?' is answerable (the main ready stock is in the report's stock section)."""
+    rows = data.get("backup", [])
+    body = _rows_to_table(rows)
+    n = len([1 for r in rows
+             if any(str(v).strip() for v in r.values() if v is not None)])
+    L = [f"# BACKUP / SPARE LAPTOPS — 3+ years old ({n})",
+         "Older spare laptops kept as standby/backup, separate from the main ready "
+         "stock. Use for 'how many backup/old spare laptops do we have?' and "
+         "'which models are in the backup pool?'."]
+    if not body:
+        L.append("\nNo backup laptops are recorded.")
+        return "\n".join(L)
+    L.append("")
+    L.extend(body)
+    return "\n".join(L)
+
+
+def _bot_config_section(data: dict) -> str:
+    """Standard laptop configuration per department/role (the spec a new joiner
+    is given), so 'what laptop/spec does a <role> get?' is answerable."""
+    rows = data.get("configuration", [])
+    body = _rows_to_table(rows)
+    L = ["# STANDARD LAPTOP CONFIGURATIONS (by department / role)",
+         "The standard laptop spec each department/role is given (device type, RAM, "
+         "processor). Use for 'what laptop/spec does a <role/department> get?'."]
+    if not body:
+        L.append("\nNo standard-configuration table is recorded.")
+        return "\n".join(L)
+    L.append("")
+    L.extend(body)
+    return "\n".join(L)
+
+
 def build_bot_context(data: dict) -> str:
     """Full context for the IT Helper bot — everything an HR head asks about,
     beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
@@ -1606,6 +1642,8 @@ def build_bot_context(data: dict) -> str:
         _bot_delivery_section(data),
         _bot_sold_section(data),
         _bot_other_stock_section(data),
+        _bot_backup_section(data),
+        _bot_config_section(data),
     ])
 
 
