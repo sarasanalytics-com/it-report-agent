@@ -112,6 +112,21 @@ Config:
   `QUESTION_LOG_DIR=/var/data`.
 - **`PORT`** — Render sets this automatically; defaults to `3000` locally.
 
+#### Migrating a Background Worker → Web Service (to expose the page)
+
+A Background Worker has **no public URL**, so the page isn't reachable on one.
+Render can't convert service types, so create a Web Service:
+
+1. **New ➜ Web Service ➜** same repo/branch; Docker (uses `bot/Dockerfile`) or
+   start command `python bot/app.py`. Copy over **all** the Worker's env vars.
+2. **Settings ➜ Health Check Path ➜ `/health`** (the home page returns 401 when a
+   token is set, so `/health` — always open — must be the health check).
+3. **Disks ➜ Add Disk ➜** mount path e.g. `/data`, 1 GB; then set
+   `QUESTION_LOG_DIR=/data` so the log persists across deploys.
+4. Set `LOG_VIEW_TOKEN=<random>`; open the page at `https://<svc>.onrender.com/?token=…`.
+5. Keep it on a paid instance (free Web Services sleep when idle, which would stop
+   the bot). Once it's healthy, **delete the old Worker**.
+
 ### Or: mirror to a Slack channel (durable, no infra)
 
 Prefer to read the history right in Slack? Set **`BOT_LOG_CHANNEL`** to a channel
