@@ -1626,12 +1626,203 @@ def _bot_config_section(data: dict) -> str:
     return "\n".join(L)
 
 
+def _norm_serial(s) -> str:
+    """Normalise a serial number for matching (trim + lowercase)."""
+    return str(s or "").strip().lower()
+
+
+def _history_by_serial(data: dict) -> dict:
+    """Index the Asset History tab by normalised serial number, keeping the most
+    recent record per serial (latest Assigned Date wins). Asset History is the
+    only tab carrying the 'New Joiner/Replacement' flag. Shared by the
+    assignment-type and vendor-purchase joins."""
+    out: dict = {}
+    for h in data.get("history", []):
+        sn = _norm_serial(h.get("Serial Number") or h.get("Laptop Tag"))
+        if not sn:
+            continue
+        d = parse_date(h.get("Assigned Date"))
+        rec = {"type": str(h.get("New Joiner/Replacement", "") or "").strip(),
+               "date": d,
+               "user": str(h.get("Username", "") or "").strip(),
+               "make": str(h.get("Laptop Make", "") or "").strip(),
+               "model": str(h.get("Laptop Model", "") or "").strip(),
+               "serial": str(h.get("Serial Number") or h.get("Laptop Tag") or "").strip()}
+        prev = out.get(sn)
+        if prev is None or (d and (prev["date"] is None or d >= prev["date"])):
+            out[sn] = rec
+    return out
+
+
+def _assigned_by_serial(data: dict) -> dict:
+    """Index currently-assigned laptops by normalised serial → {employee, dept}."""
+    out: dict = {}
+    for row in data.get("assigned", []):
+        if not is_truly_assigned(row):
+            continue
+        sn = _norm_serial(row.get("Laptop Serial Number"))
+        if sn:
+            out[sn] = {"employee": str(row.get("Employee Name", "") or "").strip(),
+                       "dept": str(row.get("Department", "") or "").strip()}
+    return out
+
+
+def get_assignment_types(data: dict) -> dict:
+    """Join currently-assigned laptops to the Asset History tab BY SERIAL NUMBER
+    to label each as a new-joiner or replacement assignment. Returns:
+      matched      -> assigned laptops with a history record (incl. type + date)
+      unmatched    -> assigned laptops with no history record (type unknown)
+      history_only -> history records whose serial isn't currently assigned
+    """
+    def _ns(s) -> str:
+        return _norm_serial(s)
+
+    hist_by_serial = _history_by_serial(data)
+    matched, unmatched, used = [], [], set()
+    for row in data.get("assigned", []):
+        if not is_truly_assigned(row):
+            continue
+        emp = str(row.get("Employee Name", "") or "").strip()
+        if not emp:
+            continue
+        sn = _ns(row.get("Laptop Serial Number"))
+        item = {"employee": emp,
+                "dept": str(row.get("Department", "") or "").strip(),
+                "make": str(row.get("Laptop Make", "") or "").strip(),
+                "model": str(row.get("Laptop Model", "") or "").strip(),
+                "serial": str(row.get("Laptop Serial Number", "") or "").strip(),
+                "tag": str(row.get("Laptop Asset Tag", "") or "").strip()}
+        h = hist_by_serial.get(sn) if sn else None
+        if h:
+            used.add(sn)
+            item["type"] = h["type"] or None
+            item["date"] = h["date"]
+            matched.append(item)
+        else:
+            item["type"], item["date"] = None, None
+            unmatched.append(item)
+
+    history_only = [r for sn, r in hist_by_serial.items() if sn not in used]
+    history_only.sort(key=lambda r: r["date"] or dt.date(1900, 1, 1), reverse=True)
+    return {"matched": matched, "unmatched": unmatched, "history_only": history_only}
+
+
+def _bot_assignment_type_section(data: dict) -> str:
+    """Per-laptop new-joiner vs replacement, matched by serial number between the
+    assigned-laptop sheet and the Asset History tab."""
+    a = get_assignment_types(data)
+    matched, unmatched, hist_only = a["matched"], a["unmatched"], a["history_only"]
+    L = ["# LAPTOP ASSIGNMENTS BY SERIAL — new joiner vs replacement",
+         "Each currently-assigned laptop matched to the Asset History tab BY SERIAL "
+         "NUMBER to show whether it was given as a NEW-JOINER setup or a REPLACEMENT. "
+         "Use for 'which laptops were replacements vs new joiners?' and 'was <name>'s "
+         "laptop a replacement?'. The new-joiner/replacement flag exists ONLY in Asset "
+         "History; an assigned laptop with no matching serial there shows 'not recorded'."]
+
+    def _laptop(d):
+        return (f"{d['make']} {d['model']}").strip() or "—"
+
+    if matched:
+        L.append(f"\n## Assigned laptops matched to history ({len(matched)})")
+        L.append("| Employee | Laptop | Serial | New joiner / Replacement | Assigned |")
+        L.append("|---|---|---|---|---|")
+        for m in matched:
+            date = m["date"].strftime("%d %b %Y") if m["date"] else "—"
+            L.append(f"| {m['employee']} | {_laptop(m)} | {m['serial'] or '—'} "
+                     f"| {m['type'] or 'not recorded'} | {date} |")
+    if unmatched:
+        L.append(f"\n## Assigned laptops with NO Asset-History record ({len(unmatched)})")
+        L.append("New-joiner/replacement is not recorded for these (no matching serial "
+                 "in Asset History).")
+        L.append("| Employee | Laptop | Serial |")
+        L.append("|---|---|---|")
+        for u in unmatched:
+            L.append(f"| {u['employee']} | {_laptop(u)} | {u['serial'] or '—'} |")
+    if hist_only:
+        L.append(f"\n## Asset-History records not tied to a current assignment ({len(hist_only)})")
+        L.append("Past or other assignments from Asset History — the laptop isn't in "
+                 "the current assigned list (e.g. since returned or reassigned).")
+        L.append("| Person | Laptop | Serial | New joiner / Replacement | Assigned |")
+        L.append("|---|---|---|---|---|")
+        for h in hist_only:
+            date = h["date"].strftime("%d %b %Y") if h["date"] else "—"
+            L.append(f"| {h['user'] or '—'} | {_laptop(h)} | {h['serial'] or '—'} "
+                     f"| {h['type'] or 'not recorded'} | {date} |")
+    if not (matched or unmatched or hist_only):
+        L.append("\nNo assigned laptops or history records are available.")
+    return "\n".join(L)
+
+
+def get_vendor_purchase_details(data: dict) -> dict:
+    """Every laptop in the 'New Laptops purchased' register, grouped by the vendor
+    it was bought from, and joined BY SERIAL NUMBER to who currently holds it
+    (assigned sheet) and whether that was a new-joiner or replacement assignment
+    (Asset History). Lets the bot answer 'how many laptops from <vendor>, with
+    serials, who has them, and is it a replacement or new joiner?'.
+    Returns {vendors:[{vendor,count,laptops:[...]}], total}."""
+    assigned = _assigned_by_serial(data)
+    hist = _history_by_serial(data)
+    by_vendor: dict[str, list] = {}
+    total = 0
+    for row in data.get("purchased", []):
+        brand = str(row.get("Brand", "") or "").strip()
+        model = str(row.get("Model", "") or "").strip()
+        serial = str(row.get("Serial no", "") or "").strip()
+        if not (brand or model or serial):
+            continue  # skip blank/spacer rows
+        vendor = str(row.get("Purchased From", "") or "").strip() or "Not recorded"
+        sn = _norm_serial(serial)
+        a = assigned.get(sn) if sn else None
+        h = hist.get(sn) if sn else None
+        by_vendor.setdefault(vendor, []).append({
+            "serial": serial or "—",
+            "laptop": (f"{brand} {model}").strip() or "—",
+            "assignee": a["employee"] if a else None,
+            "dept": a["dept"] if a else None,
+            "type": (h["type"] if h and h["type"] else None),
+            "date": parse_date(row.get("Warranty Start Date")),
+        })
+        total += 1
+    vendors = [{"vendor": k, "count": len(v), "laptops": v}
+               for k, v in by_vendor.items()]
+    vendors.sort(key=lambda x: -x["count"])
+    return {"vendors": vendors, "total": total}
+
+
+def _bot_vendor_purchase_section(data: dict) -> str:
+    """Per-vendor purchased laptops with serial, current assignee and new-joiner/
+    replacement — the detailed answer to 'how many laptops from <vendor>?'."""
+    vp = get_vendor_purchase_details(data)
+    L = [f"# LAPTOP PURCHASES BY VENDOR — serial · assignee · type ({vp['total']})",
+         "Every laptop in the 'New Laptops purchased' register, grouped by the vendor "
+         "it was bought from, each joined BY SERIAL NUMBER to who holds it now and "
+         "whether that was a new-joiner or replacement assignment. Use for 'how many "
+         "laptops did we buy from <vendor>, with serial numbers, who they're assigned "
+         "to, and is it a replacement or new joiner?'. A blank assignee means it isn't "
+         "assigned (in stock); a blank type means there's no Asset-History record."]
+    if not vp["vendors"]:
+        L.append("\nNo laptop purchase register is connected (the 'New Laptops "
+                 "purchased' sheet has no rows).")
+        return "\n".join(L)
+    for v in vp["vendors"]:
+        L.append(f"\n## {v['vendor']} — {v['count']} laptop(s)")
+        L.append("| Serial | Laptop | Assigned to | New joiner / Replacement |")
+        L.append("|---|---|---|---|")
+        for it in v["laptops"]:
+            L.append(f"| {it['serial']} | {it['laptop']} "
+                     f"| {it['assignee'] or 'In stock / unassigned'} "
+                     f"| {it['type'] or 'not recorded'} |")
+    return "\n".join(L)
+
+
 def build_bot_context(data: dict) -> str:
     """Full context for the IT Helper bot — everything an HR head asks about,
     beyond the aggregate report: per-person laptops, upcoming joiners + onboarding,
     returns/offboarding, peripherals, open tickets, software & budget."""
     return "\n\n".join([
         build_employee_directory(data),
+        _bot_assignment_type_section(data),
+        _bot_vendor_purchase_section(data),
         _bot_joiners_section(data),
         _bot_joiners_history_section(data),
         _bot_returns_section(data),

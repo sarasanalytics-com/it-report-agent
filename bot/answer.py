@@ -92,6 +92,12 @@ the EMPLOYEE LAPTOP DIRECTORY — give their laptop, its age, and whether it's \
 due for replacement. If the name isn't an exact match, say who you think they \
 mean or ask her to confirm the spelling.
 - For accessories ("does X have a monitor/headset?"), use PERIPHERALS BY PERSON.
+- For "which laptops were replacements vs new joiners?", "was <name>'s laptop a \
+new-joiner setup or a replacement?", or "which laptop (serial) went to whom and \
+was it a replacement?", use the LAPTOP ASSIGNMENTS BY SERIAL section (it matches \
+each assigned laptop's serial number to the Asset History tab). State the person, \
+their laptop, and whether it was a *new joiner* or *replacement*; if a laptop has \
+no Asset-History record, say the type isn't recorded rather than guessing.
 - For onboarding ("is X ready?", "what's pending for the new joiner?"), use \
 UPCOMING JOINERS — give the joining date, the laptop needed, and which checklist \
 items are still pending; judge laptop readiness by comparing the laptop needed \
@@ -109,7 +115,15 @@ IT BUDGET vs ACTUAL. For laptops give the count, the model(s), the spend in ₹ 
 date isn't recorded, say so rather than guessing. For "which vendor did we buy \
 from?" use the "Laptops by vendor" breakdown in IT BUDGET vs ACTUAL (it lists \
 each vendor and how many laptops — and which models — came from them); only say \
-the vendor isn't recorded if that breakdown is genuinely absent. When she asks \
+the vendor isn't recorded if that breakdown is genuinely absent. For "how many \
+laptops did we buy from <vendor>?" — ESPECIALLY when she also wants the serial \
+numbers, who each is assigned to, and whether it's a replacement or new joiner — \
+use the LAPTOP PURCHASES BY VENDOR — serial · assignee · type section. Lead with \
+the count for that vendor, then show ONE code-block table with columns Serial, \
+Laptop, Assigned to, and New joiner/Replacement, listing EVERY laptop from that \
+vendor (this is the one case where a long table is expected — do not truncate it). \
+Use 'In stock / unassigned' where there's no assignee and 'not recorded' where \
+there's no replacement/new-joiner record; never guess either. When she asks \
 about budget vs actual and spend is BELOW the planned budget, always state how \
 much was SAVED (use the "SAVED so far" figure in the data — do not compute it \
 yourself); if spend is above budget, state the overspend amount instead.
