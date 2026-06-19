@@ -18,6 +18,7 @@ oauth_config:
     bot:
       - app_mentions:read   # see @mentions in channels
       - chat:write          # post replies
+      - files:write         # upload the vendor list as Excel + image
       - im:history          # read DMs sent to the bot
       - im:read             # detect DM channels
       - im:write            # open/DM the user

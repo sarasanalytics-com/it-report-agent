@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import os
 import re
+import pathlib
 import logging
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from answer import answer_question, warm, get_report_blocks, force_refresh
+from answer import (answer_question, warm, get_report_blocks, force_refresh,
+                    build_vendor_purchase_artifacts)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -178,6 +180,27 @@ def _reply(text: str | None, say, client, event, thread: bool) -> None:
         except Exception as exc:  # noqa: BLE001
             log.exception("Failed to build on-demand report")
             say(text=f":warning: Couldn't build the report just now ({exc}).", thread_ts=thread_ts)
+        return
+
+    # "How many laptops from <vendor>?" → deliver the full list as an Excel file
+    # + a table image (clearest for the 45-row, multi-column breakdown).
+    try:
+        arts = build_vendor_purchase_artifacts(question)
+    except Exception:  # noqa: BLE001 - never let this crash the answer path
+        log.exception("vendor artifact build failed")
+        arts = None
+    if arts and arts.get("files"):
+        try:
+            client.files_upload_v2(
+                channel=event["channel"],
+                initial_comment=arts["summary"],
+                file_uploads=[{"file": f, "title": pathlib.PurePath(f).name}
+                              for f in arts["files"]],
+                **({"thread_ts": thread_ts} if thread_ts else {}),
+            )
+        except Exception:  # noqa: BLE001 - fall back to the in-chat text table
+            log.exception("vendor file upload failed")
+            say(text=(arts.get("text_table") or arts["summary"]), thread_ts=thread_ts)
         return
 
     # Post an instant placeholder so it never looks dead, then edit in the answer.
