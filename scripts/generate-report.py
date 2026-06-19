@@ -3300,6 +3300,12 @@ def main() -> None:
     (OUTPUT_DIR / "bot-context.md").write_text(
         build_bot_context(data), encoding="utf-8")
 
+    # Structured vendor→laptop purchase detail so the bot can render the full
+    # "laptops from <vendor>" table deterministically (every row, aligned) rather
+    # than relying on the LLM to relay 45 rows within a token budget.
+    (OUTPUT_DIR / "vendor-purchases.json").write_text(
+        json.dumps(get_vendor_purchase_details(data), default=str), encoding="utf-8")
+
     # Slack Block Kit layout (richer visual post). post-to-slack.py uses these
     # blocks when present, with slack-summary.md as the notification fallback.
     blocks = build_report_blocks(data, prev_snap, "Weekly" if report_type == "weekly" else "Monthly")

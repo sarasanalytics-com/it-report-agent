@@ -16,11 +16,13 @@ CLI usage (for local testing once env + data are set up):
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import logging
 import json
 import pathlib
+import datetime as dt
 import threading
 import subprocess
 
@@ -279,9 +281,88 @@ def get_report_blocks() -> tuple[list | None, str]:
     return blocks, summary
 
 
+def _aligned_table(headers: list[str], rows: list[list[str]]) -> str:
+    """A fixed-width, space-padded monospace table (renders aligned in a Slack
+    code block). Built deterministically so every row lines up."""
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], len(c))
+
+    def _line(cells):
+        return "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)).rstrip()
+
+    out = [_line(headers), _line(["-" * w for w in widths])]
+    out.extend(_line(r) for r in rows)
+    return "\n".join(out)
+
+
+def _nice_date(s) -> str:
+    if not s or str(s) in ("None", "—", ""):
+        return "—"
+    try:
+        return dt.datetime.strptime(str(s)[:10], "%Y-%m-%d").strftime("%d %b %Y")
+    except ValueError:
+        return str(s)
+
+
+# Vendor-purchase questions ("how many laptops from NGSS?") deserve the FULL
+# list, perfectly aligned — too many rows for the LLM to relay within its token
+# budget, and it won't column-align them. So answer these deterministically.
+_VENDOR_INTENT_RE = re.compile(
+    r"laptop|purchas|bought|\bbuy\b|buying|procur|serial|how many|assigned", re.I)
+
+
+def _vendor_purchase_table_answer(question: str) -> str | None:
+    """If the question names a known vendor and asks about laptops bought from
+    them, return the full aligned table directly (every row). Else None."""
+    path = OUTPUT / "vendor-purchases.json"
+    if not path.exists():
+        return None
+    try:
+        vp = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    vendors = vp.get("vendors") or []
+    if not vendors or not _VENDOR_INTENT_RE.search(question):
+        return None
+    # Which known vendor is named? (Longest name first so "NGSS India" wins over "NGSS".)
+    match = None
+    for v in sorted(vendors, key=lambda x: -len(str(x.get("vendor") or ""))):
+        name = str(v.get("vendor") or "").strip()
+        if not name or name.lower() == "not recorded":
+            continue
+        if re.search(r"\b" + re.escape(name.lower()) + r"\b", question.lower()):
+            match = v
+            break
+    if not match:
+        return None
+    headers = ["Asset ID", "Serial", "Laptop", "Assigned to", "Type", "Purchased"]
+    rows = []
+    for it in match.get("laptops", []):
+        rows.append([
+            str(it.get("asset_id") or "—"),
+            str(it.get("serial") or "—"),
+            str(it.get("laptop") or "—"),
+            str(it.get("assignee") or "In stock / unassigned"),
+            str(it.get("type") or "not recorded"),
+            _nice_date(it.get("date")),
+        ])
+    if not rows:
+        return None
+    lead = (f"*{match['vendor']}* — *{match['count']} laptop(s)* purchased. Full list "
+            f"with serial numbers, who each is assigned to, whether it's a new joiner "
+            f"or replacement, and the purchase date:")
+    return lead + "\n```\n" + _aligned_table(headers, rows) + "\n```"
+
+
 def answer_question(question: str) -> str:
     """Answer a natural-language question from the live IT data."""
     context = get_context()
+    # Deterministic full-table answer for "laptops from <vendor>" questions.
+    direct = _vendor_purchase_table_answer(question)
+    if direct is not None:
+        return direct
     client = _client_singleton()
     msg = client.messages.create(
         model=MODEL,
