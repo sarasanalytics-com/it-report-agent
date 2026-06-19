@@ -82,12 +82,35 @@ docker run --env-file bot/.env it-bot
 Socket Mode means **no public URL** — any host that can run a long-lived process
 works. Recommended easy options:
 
-- **Render** → New **Background Worker** → connect this repo → Docker (or
+- **Render** → New **Web Service** → connect this repo → Docker (or
   `pip install -r requirements.txt -r bot/requirements.txt` + start command
   `python bot/app.py`) → add the env vars from `bot/.env`.
 - **Railway / Fly.io** → deploy the Dockerfile → set the same env vars.
 
 Pick the smallest instance; the bot is idle until asked.
+
+> Use a **Web Service** (not a Background Worker) so the question-log web page is
+> reachable — the bot binds `$PORT` for it. A Worker still runs the bot but the
+> page won't be exposed.
+
+## Question log (web page)
+
+Every question asked to the bot is recorded and shown on a small built-in web
+page (served by the bot, no extra service):
+
+- `https://<your-render-url>/` — readable, searchable list (newest first)
+- `https://<your-render-url>/questions.csv` — download everything as CSV
+- `https://<your-render-url>/health` — health check (always open)
+
+Config:
+
+- **`LOG_VIEW_TOKEN`** — if set, the page requires `?token=<value>` (open it as
+  `https://<url>/?token=…`). **Set this** — questions can contain employee names.
+- **`QUESTION_LOG_DIR`** — where the log file lives (default `output/`). On
+  Render the disk is **ephemeral**, so to keep history across deploys, attach a
+  **persistent disk** (e.g. mount at `/var/data`) and set
+  `QUESTION_LOG_DIR=/var/data`.
+- **`PORT`** — Render sets this automatically; defaults to `3000` locally.
 
 ## Notes & guardrails
 

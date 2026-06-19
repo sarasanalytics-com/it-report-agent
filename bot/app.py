@@ -28,6 +28,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from answer import (answer_question, warm, get_report_blocks, force_refresh,
                     build_vendor_purchase_artifacts)
+import qlog
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -151,6 +152,9 @@ def _reply(text: str | None, say, client, event, thread: bool) -> None:
     thread_ts = (event.get("thread_ts") or event.get("ts")) if thread else None
     log.info("Question from %s (%s): %r",
              event.get("user"), event.get("channel_type") or "channel", (question or "")[:120])
+    # Record every real question for the review web page / CSV.
+    qlog.log_question(event.get("user"), question,
+                      channel_type=event.get("channel_type") or "channel")
     if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
         return
@@ -261,6 +265,14 @@ def handle_message(event, say, client):
 
 
 def main() -> None:
+    # Serve the question-log web page (binds $PORT — required for a Render Web
+    # Service; harmless elsewhere). Started before the data warm-up so the page
+    # is reachable immediately.
+    try:
+        port = qlog.start_web_server()
+        log.info("Question log viewable at http://0.0.0.0:%d/", port)
+    except Exception:  # noqa: BLE001 - the bot must run even if the page can't
+        log.exception("Could not start the question-log web server.")
     # Warm the data cache on startup so the first question is fast.
     try:
         warm()
