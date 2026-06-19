@@ -119,9 +119,10 @@ the vendor isn't recorded if that breakdown is genuinely absent. For "how many \
 laptops did we buy from <vendor>?" — ESPECIALLY when she also wants the serial \
 numbers, who each is assigned to, and whether it's a replacement or new joiner — \
 use the LAPTOP PURCHASES BY VENDOR — serial · assignee · type section. Lead with \
-the count for that vendor, then show ONE code-block table with columns Serial, \
-Laptop, Assigned to, and New joiner/Replacement, listing EVERY laptop from that \
-vendor (this is the one case where a long table is expected — do not truncate it). \
+the count for that vendor, then show ONE code-block table with columns Asset ID, \
+Serial, Laptop, Assigned to, New joiner/Replacement, and Purchased (date), listing \
+EVERY laptop from that vendor (this is the one case where a long table is expected \
+— do not truncate it). \
 Use 'In stock / unassigned' where there's no assignee and 'not recorded' where \
 there's no replacement/new-joiner record; never guess either. When she asks \
 about budget vs actual and spend is BELOW the planned budget, always state how \

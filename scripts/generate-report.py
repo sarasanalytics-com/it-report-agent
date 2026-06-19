@@ -1762,6 +1762,17 @@ def get_vendor_purchase_details(data: dict) -> dict:
     Returns {vendors:[{vendor,count,laptops:[...]}], total}."""
     assigned = _assigned_by_serial(data)
     hist = _history_by_serial(data)
+
+    def _purchase_date(row):
+        # Prefer a real purchase-date column; fall back to warranty start (the
+        # purchase proxy used elsewhere in the report).
+        for k in ("Purchase Date", "Purchased On", "Date of Purchase", "Bought On",
+                  "PO Date", "Invoice Date", "Purchase date"):
+            d = parse_date(row.get(k))
+            if d:
+                return d
+        return parse_date(row.get("Warranty Start Date"))
+
     by_vendor: dict[str, list] = {}
     total = 0
     for row in data.get("purchased", []):
@@ -1771,16 +1782,19 @@ def get_vendor_purchase_details(data: dict) -> dict:
         if not (brand or model or serial):
             continue  # skip blank/spacer rows
         vendor = str(row.get("Purchased From", "") or "").strip() or "Not recorded"
+        asset_id = str(row.get("Asset id") or row.get("Asset ID")
+                       or row.get("Asset Id") or "").strip()
         sn = _norm_serial(serial)
         a = assigned.get(sn) if sn else None
         h = hist.get(sn) if sn else None
         by_vendor.setdefault(vendor, []).append({
+            "asset_id": asset_id or "—",
             "serial": serial or "—",
             "laptop": (f"{brand} {model}").strip() or "—",
             "assignee": a["employee"] if a else None,
             "dept": a["dept"] if a else None,
             "type": (h["type"] if h and h["type"] else None),
-            "date": parse_date(row.get("Warranty Start Date")),
+            "date": _purchase_date(row),
         })
         total += 1
     vendors = [{"vendor": k, "count": len(v), "laptops": v}
@@ -1806,12 +1820,13 @@ def _bot_vendor_purchase_section(data: dict) -> str:
         return "\n".join(L)
     for v in vp["vendors"]:
         L.append(f"\n## {v['vendor']} — {v['count']} laptop(s)")
-        L.append("| Serial | Laptop | Assigned to | New joiner / Replacement |")
-        L.append("|---|---|---|---|")
+        L.append("| Asset ID | Serial | Laptop | Assigned to | New joiner / Replacement | Purchased |")
+        L.append("|---|---|---|---|---|---|")
         for it in v["laptops"]:
-            L.append(f"| {it['serial']} | {it['laptop']} "
+            date = it["date"].strftime("%d %b %Y") if it["date"] else "—"
+            L.append(f"| {it['asset_id']} | {it['serial']} | {it['laptop']} "
                      f"| {it['assignee'] or 'In stock / unassigned'} "
-                     f"| {it['type'] or 'not recorded'} |")
+                     f"| {it['type'] or 'not recorded'} | {date} |")
     return "\n".join(L)
 
 
