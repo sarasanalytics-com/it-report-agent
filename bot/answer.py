@@ -313,9 +313,12 @@ _VENDOR_INTENT_RE = re.compile(
     r"laptop|purchas|bought|\bbuy\b|buying|procur|serial|how many|assigned", re.I)
 
 
-def _vendor_purchase_table_answer(question: str) -> str | None:
-    """If the question names a known vendor and asks about laptops bought from
-    them, return the full aligned table directly (every row). Else None."""
+_VENDOR_HEADERS = ["Asset ID", "Serial", "Laptop", "Assigned to", "Type", "Purchased"]
+
+
+def _match_vendor(question: str) -> dict | None:
+    """Return the purchase record for the known vendor named in the question
+    (with laptops), if it reads like a 'laptops from <vendor>' ask. Else None."""
     path = OUTPUT / "vendor-purchases.json"
     if not path.exists():
         return None
@@ -326,18 +329,17 @@ def _vendor_purchase_table_answer(question: str) -> str | None:
     vendors = vp.get("vendors") or []
     if not vendors or not _VENDOR_INTENT_RE.search(question):
         return None
-    # Which known vendor is named? (Longest name first so "NGSS India" wins over "NGSS".)
-    match = None
+    # Longest name first so "NGSS India" wins over "NGSS".
     for v in sorted(vendors, key=lambda x: -len(str(x.get("vendor") or ""))):
         name = str(v.get("vendor") or "").strip()
         if not name or name.lower() == "not recorded":
             continue
         if re.search(r"\b" + re.escape(name.lower()) + r"\b", question.lower()):
-            match = v
-            break
-    if not match:
-        return None
-    headers = ["Asset ID", "Serial", "Laptop", "Assigned to", "Type", "Purchased"]
+            return v
+    return None
+
+
+def _vendor_rows(match: dict) -> list[list[str]]:
     rows = []
     for it in match.get("laptops", []):
         rows.append([
@@ -348,12 +350,112 @@ def _vendor_purchase_table_answer(question: str) -> str | None:
             str(it.get("type") or "not recorded"),
             _nice_date(it.get("date")),
         ])
+    return rows
+
+
+def _vendor_purchase_table_answer(question: str) -> str | None:
+    """The full aligned monospace table as text (fallback when files can't be
+    uploaded, and for CLI use)."""
+    match = _match_vendor(question)
+    if not match:
+        return None
+    rows = _vendor_rows(match)
     if not rows:
         return None
     lead = (f"*{match['vendor']}* — *{match['count']} laptop(s)* purchased. Full list "
             f"with serial numbers, who each is assigned to, whether it's a new joiner "
             f"or replacement, and the purchase date:")
-    return lead + "\n```\n" + _aligned_table(headers, rows) + "\n```"
+    return lead + "\n```\n" + _aligned_table(_VENDOR_HEADERS, rows) + "\n```"
+
+
+def _write_vendor_xlsx(vendor: str, headers: list[str], rows: list[list[str]],
+                       path: pathlib.Path) -> None:
+    """Write the vendor laptop list as a real .xlsx (bold header, sized columns)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = re.sub(r"[^A-Za-z0-9 _-]", "", vendor)[:31] or "Laptops"
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    head_fill = PatternFill("solid", fgColor="2C2D30")
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = head_fill
+    for i, h in enumerate(headers, start=1):
+        longest = max([len(str(h))] + [len(str(r[i - 1])) for r in rows] or [0])
+        ws.column_dimensions[get_column_letter(i)].width = min(longest + 2, 42)
+    ws.freeze_panes = "A2"
+    wb.save(path)
+
+
+def _render_vendor_png(title: str, headers: list[str], rows: list[list[str]],
+                       path: pathlib.Path) -> None:
+    """Render the vendor laptop list as a clean table image (identical on every
+    device). Lazily imports matplotlib so bot startup stays fast."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(rows)
+    fig_h = max(1.8, 0.34 * (n + 2))
+    fig, ax = plt.subplots(figsize=(14, fig_h))
+    ax.axis("off")
+    ax.set_title(title, fontsize=14, fontweight="bold", loc="left", pad=14)
+    tbl = ax.table(cellText=rows, colLabels=headers, loc="upper left", cellLoc="left")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9.5)
+    tbl.scale(1, 1.35)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#d9d9d9")
+        if r == 0:
+            cell.set_facecolor("#2c2d30")
+            cell.set_text_props(color="white", fontweight="bold")
+        elif r % 2 == 0:
+            cell.set_facecolor("#f4f4f5")
+    try:
+        tbl.auto_set_column_width(col=list(range(len(headers))))
+    except Exception:  # noqa: BLE001 - layout best-effort
+        pass
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def build_vendor_purchase_artifacts(question: str) -> dict | None:
+    """For a 'laptops from <vendor>' question, build an Excel file + a table
+    image and return {summary, files, text_table}. Returns None if the question
+    isn't a vendor-purchase ask. Ensures data is fresh first."""
+    get_context()  # refresh + (re)write vendor-purchases.json if stale
+    match = _match_vendor(question)
+    if not match:
+        return None
+    rows = _vendor_rows(match)
+    if not rows:
+        return None
+    vendor, count = match["vendor"], match["count"]
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", vendor).strip("_")[:40] or "vendor"
+    title = f"{vendor} — {count} laptop(s) purchased"
+    files: list[str] = []
+    xlsx = OUTPUT / f"laptops_from_{safe}.xlsx"
+    try:
+        _write_vendor_xlsx(vendor, _VENDOR_HEADERS, rows, xlsx)
+        files.append(str(xlsx))
+    except Exception:  # noqa: BLE001
+        log.exception("vendor xlsx build failed")
+    png = OUTPUT / f"laptops_from_{safe}.png"
+    try:
+        _render_vendor_png(title, _VENDOR_HEADERS, rows, png)
+        files.append(str(png))
+    except Exception:  # noqa: BLE001
+        log.exception("vendor table image render failed")
+    summary = (f"*{vendor}* — *{count} laptop(s)* purchased. Full list attached "
+               f"(spreadsheet + image): serial numbers, who each is assigned to, "
+               f"new joiner vs replacement, and the purchase date.")
+    return {"summary": summary, "files": files,
+            "text_table": _vendor_purchase_table_answer(question),
+            "vendor": vendor, "count": count}
 
 
 def answer_question(question: str) -> str:
