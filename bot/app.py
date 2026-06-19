@@ -133,10 +133,33 @@ def _load_allowlist() -> set[str]:
 
 ALLOWED_USERS = _load_allowlist()
 
+# Optional: mirror every question to a Slack channel (durable, browsable history
+# with no infra). Set BOT_LOG_CHANNEL to a channel ID (e.g. C0123ABCD) and invite
+# the bot to it. Empty = off (the web page / CSV log still records everything).
+LOG_CHANNEL = os.environ.get("BOT_LOG_CHANNEL", "").strip()
+
 DENY_MESSAGE = (
     "Sorry, I can only share IT information with approved people. If you think "
     "you should have access, please contact the IT team. :lock:"
 )
+
+
+def _mirror_question(client, event, question: str) -> None:
+    """Post the question to the log channel, if configured. Uses <@user> so Slack
+    renders the asker's name (no extra scope needed). Never raises."""
+    if not LOG_CHANNEL:
+        return
+    user = event.get("user")
+    who = f"<@{user}>" if user else "someone"
+    where = event.get("channel_type") or "channel"
+    try:
+        client.chat_postMessage(
+            channel=LOG_CHANNEL,
+            text=f":speech_balloon: {who} asked _(via {where})_:\n> {question}",
+            unfurl_links=False, unfurl_media=False,
+        )
+    except Exception:  # noqa: BLE001 - logging must never break a reply
+        log.exception("could not mirror question to log channel %s", LOG_CHANNEL)
 
 
 def _authorized(event) -> bool:
@@ -152,9 +175,11 @@ def _reply(text: str | None, say, client, event, thread: bool) -> None:
     thread_ts = (event.get("thread_ts") or event.get("ts")) if thread else None
     log.info("Question from %s (%s): %r",
              event.get("user"), event.get("channel_type") or "channel", (question or "")[:120])
-    # Record every real question for the review web page / CSV.
+    # Record every real question for the review web page / CSV, and (optionally)
+    # mirror it to a Slack channel for a durable, browsable history.
     qlog.log_question(event.get("user"), question,
                       channel_type=event.get("channel_type") or "channel")
+    _mirror_question(client, event, question)
     if not question or question.lower() in ("hi", "hello", "hey", "help", "?"):
         say(text=WELCOME, thread_ts=thread_ts)
         return
@@ -283,6 +308,8 @@ def main() -> None:
     else:
         log.warning("BOT_ALLOWED_USERS is empty — the bot will answer ANYONE who "
                     "can DM or @mention it. Set BOT_ALLOWED_USERS to restrict access.")
+    if LOG_CHANNEL:
+        log.info("Mirroring questions to Slack channel %s.", LOG_CHANNEL)
     log.info("IT bot starting (Socket Mode) …")
     SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
 

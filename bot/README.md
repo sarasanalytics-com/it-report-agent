@@ -112,6 +112,14 @@ Config:
   `QUESTION_LOG_DIR=/var/data`.
 - **`PORT`** — Render sets this automatically; defaults to `3000` locally.
 
+### Or: mirror to a Slack channel (durable, no infra)
+
+Prefer to read the history right in Slack? Set **`BOT_LOG_CHANNEL`** to a channel
+ID (e.g. `C0123ABCD`) and **invite the bot to that channel**. Every question is
+then posted there as it's asked — with the asker's name — giving you a permanent,
+searchable record without a Web Service or persistent disk. The web page/CSV and
+the channel mirror are independent; use either or both.
+
 ## Notes & guardrails
 
 - **Grounded answers only.** The system prompt restricts Claude to the fetched
