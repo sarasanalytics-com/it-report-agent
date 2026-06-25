@@ -2065,8 +2065,11 @@ def get_purchases_by_vendor(data: dict) -> dict:
 # Match the specific hardware-procurement row name(s) — not loose substrings
 # like "laptop", which could catch Microsoft Surface Laptop etc.
 HARDWARE_SPEND_KEYWORDS = ["laptops procurement"]
-# Row names that are aggregate/total rows (would double-count if summed)
+# Row names that are aggregate/total rows (would double-count if summed).
 TOTAL_ROW_KEYWORDS = ["total", "grand total", "sum"]
+# A row is also a total/aggregate if its name BEGINS like one (e.g. "Total Cost",
+# "Grand Total ($)", "Subtotal") or ENDS in "… total" (e.g. "Monthly Total").
+_TOTAL_PREFIXES = ("total", "grand total", "sub total", "subtotal")
 
 
 def _is_hardware_row(row: dict) -> bool:
@@ -2075,8 +2078,18 @@ def _is_hardware_row(row: dict) -> bool:
 
 
 def _is_total_row(row: dict) -> bool:
-    app_name = str(row.get("APPLICATION / SW / LICENSE", "")).strip().lower()
-    return app_name in TOTAL_ROW_KEYWORDS
+    """True for the sheet's own aggregate/total rows, which must NOT be summed
+    with the line items (doing so doubles the figure). Matches exact keywords,
+    names that begin like a total ('Total Cost', 'Grand Total ($)', 'Subtotal'),
+    and names that end in '… total' ('Monthly Total')."""
+    raw = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip().lower()
+    # Normalise punctuation/symbols so 'Total ($)' / 'Total:' / 'Total -' match.
+    name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", raw)).strip()
+    if not name:
+        return False
+    return (name in TOTAL_ROW_KEYWORDS
+            or name.startswith(_TOTAL_PREFIXES)
+            or name.endswith(" total"))
 
 
 _warned_spend_keys: set = set()
@@ -3156,102 +3169,75 @@ def _blk_named_section(title: str, lines: list, empty: str) -> list:
 
 
 def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> list:
-    """Render the seven-section report as Slack Block Kit blocks for a cleaner,
-    dashboard-style post. Falls back to the text summary for notifications."""
+    """Compact, action-first Slack post for the manager: lead with what she needs
+    to decide/approve, then a one-line snapshot. Full detail lives in the report
+    doc. Falls back to the text summary for notifications."""
     issues = get_it_issues(data)
     open_issues = [i for i in issues["issues"] if i["is_open"]]
-    stock_os = get_stock_by_os(data)
     stock_ready = len(data["in_stock"])
     aging = get_aging_laptops(data)
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
     laptop_spend = get_laptop_spend(data)
     software_total = get_software_spend_this_month(data)
-    runway = get_procurement_runway(data)
     vendor = get_vendor_payments(data)
 
-    blocks = [_blk_header(f"📋 IT {period} Report — {TODAY.strftime('%d %b %Y')}")]
+    def _overdue_days(v) -> int:
+        d = v.get("due")
+        return (TODAY - d).days if d and d < TODAY else 0
 
-    # 1) Open tickets
-    if not issues["connected"]:
-        lines = ["_No ticket source connected_"]
-    elif not open_issues:
-        lines = ["None open ✅"]
-    else:
-        lines = [f"› *{_truncate(i['issue'], 55)}* — _{_truncate(i['remark'], 90)}_  "
-                 f"`{i['status'] or 'Open'}` · raised by {i['raised_by'] or 'unknown'} "
-                 f"· owner {i['owner'] or 'unassigned'}" for i in open_issues]
-    blocks += _blk_named_section(f"*🐞 1) Open IT Tickets — {len(open_issues)}*", lines, "—")
+    blocks = [_blk_header(f"📋 IT {period} — {TODAY.strftime('%d %b %Y')}")]
 
-    # 2) Stock ready by OS + configs
-    if stock_ready == 0:
-        lines = ["None in ready stock"]
-    else:
-        lines = []
-        for os_label, items in stock_os.items():
-            lines.append(f"*{os_label} — {len(items)}*")
-            lines += [f"› {it['config']}" for it in items]
-    blocks += _blk_named_section(f"*💻 2) Laptop Stock Ready — {stock_ready}*", lines, "—")
-
-    # 3) Procurement suggestion
+    # ── Actions needed (the lead — only things the manager must act on) ──
+    actions = []
     need = len(joiners) + len(critical) - stock_ready
     if need > 0:
-        line = (f"⚠️ Order *{need}* laptop(s) — {len(joiners)} joiners (30d) + "
-                f"{len(critical)} critical replacements vs {stock_ready} ready")
+        actions.append(
+            f"🔴 *Approve buying {need} laptop(s)* — only {stock_ready} in stock vs "
+            f"{len(critical)} critical replacement(s) + {len(joiners)} joiner(s) due in 30d")
+    if vendor.get("connected") and vendor.get("pending"):
+        oldest = max(vendor["pending"], key=_overdue_days, default=None)
+        od = _overdue_days(oldest) if oldest else 0
+        tag = f" — oldest {od}d overdue ({oldest['vendor']})" if od > 0 else ""
+        actions.append(
+            f"🔴 *Release {vendor['count']} vendor payment(s) — "
+            f"{fmt_inr_full(vendor['total_inr'])}*{tag}")
+    if critical:
+        oldest_a = max(critical, key=lambda a: a["age_years"])
+        actions.append(
+            f"🟠 *Approve replacing {len(critical)} laptop(s) over 3.5yr* — "
+            f"oldest {oldest_a['age_years']}yr ({oldest_a['employee']})")
+    if joiners and (need > 0 or stock_ready < len(joiners)):
+        j = min(joiners, key=lambda x: x["days_until"])
+        when = "today" if j["days_until"] <= 0 else f"in {j['days_until']}d"
+        actions.append(
+            f"🟠 *Make sure a laptop is ready for {j['name']}* — starts {when} "
+            f"({j['doj'].strftime('%d %b')}); stock is tight")
+    if actions:
+        blocks.append(_blk_section("*🔔 Actions needed*\n" + "\n".join(f"• {a}" for a in actions)))
     else:
-        line = (f"✅ Stock covers demand — {stock_ready} ready vs {len(joiners)} joiners "
-                f"+ {len(critical)} critical replacements")
-    proc_lines = [line]
-    if runway["weeks"] is not None:
-        proc_lines.append(f"_Runway ~{runway['weeks']} wks at {runway['avg_per_week']} joiners/wk_")
-    blocks += _blk_named_section("*🛒 3) Procurement Suggestion*", proc_lines, "—")
+        blocks.append(_blk_section("*🔔 Actions needed*\n• ✅ Nothing needs your attention this week."))
 
-    # 4) Upcoming joiners
-    if not joiners:
-        lines = ["None in the next 30 days"]
-    else:
-        lines = []
-        for j in joiners:
-            days = f"in {j['days_until']}d" if j['days_until'] > 0 else "today"
-            cfg = f" · _{j['laptop_config']}_" if j['laptop_config'] else ""
-            lines.append(f"› {j['name']} — {j['department']} · DOJ {j['doj'].strftime('%d %b')} ({days}){cfg}")
-    blocks += _blk_named_section(f"*⏰ 4) Upcoming Joiners (30d) — {len(joiners)}*", lines, "—")
-
-    # 5) Spend — total software/license spend + laptop procurement
-    blocks += _blk_named_section(
-        f"*💰 5) Spend This Month — {_spend_month_label(data)}*",
-        [f"*Apps & licenses* {fmt_usd(software_total)}",
-         f"*Laptops* (procurement plan) {fmt_usd(laptop_spend['total_spend'])}"],
-        "—")
-
-    # 6) Aging + action
-    if not aging:
-        lines = ["None over 3.5 years ✅"]
-    else:
-        lines = [f"› {a['employee']} — {_short_model(a['make'], a['model'])} · "
-                 f"{a['age_years']}yr → _{aging_action(a)}_" for a in aging[:8]]
-        if len(aging) > 8:
-            lines.append(f"_+{len(aging) - 8} more (oldest first)_")
-    blocks += _blk_named_section(
-        f"*⏳ 6) Laptop Aging — {len(aging)} over 3.5yr ({len(critical)} critical)*", lines, "—")
-
-    # 7) Vendor payments
-    if not vendor["connected"]:
-        lines = ["_No vendor payments sheet connected_"]
-    elif not vendor["pending"]:
-        lines = ["None pending ✅"]
-    else:
-        lines = []
-        for v in vendor["pending"]:
-            due = v["due"].strftime('%d %b %Y') if v["due"] else "—"
-            inv = f" ({v['invoice']})" if v["invoice"] else ""
-            ov = f" · overdue {v['overdue']}" if v["overdue"] else ""
-            lines.append(f"› {v['vendor']}{inv} — *{fmt_inr_full(v['amount_inr'])}* · due {due}{ov}")
-    blocks += _blk_named_section(
-        f"*🧾 7) Vendor Payments Pending — {vendor['count']} · {fmt_inr_full(vendor['total_inr'])}*", lines, "—")
+    # ── Snapshot (everything else, one line each) ──
+    next_joiner = ""
+    if joiners:
+        j = min(joiners, key=lambda x: x["days_until"])
+        next_joiner = f" — next: {j['name']} ({j['doj'].strftime('%d %b')})"
+    snap = [
+        f"• *Open IT tickets:* {len(open_issues)}",
+        f"• *Spare laptops ready:* {stock_ready}    *Aging:* {len(aging)} over 3.5yr "
+        f"({len(critical)} critical)",
+        f"• *Joiners (30d):* {len(joiners)}{next_joiner}",
+        f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)} · "
+        f"laptops {fmt_usd(laptop_spend['total_spend'])}",
+    ]
+    blocks.append(_blk_divider())
+    blocks.append(_blk_section("*📊 Snapshot*\n" + "\n".join(snap)))
 
     blocks.append(_blk_divider())
-    blocks.append(_blk_context(f"{_fx_footnote()}  ·  React 👍/👎 or reply with feedback."))
+    blocks.append(_blk_context(
+        f"{_fx_footnote()}  ·  Full ticket / aging / vendor detail in the IT report doc.  "
+        f"·  React 👍/👎 or reply with feedback."))
     return blocks
 
 
