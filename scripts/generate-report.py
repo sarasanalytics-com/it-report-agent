@@ -3236,8 +3236,9 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
 
     blocks.append(_blk_divider())
     blocks.append(_blk_context(
-        f"{_fx_footnote()}  ·  Full ticket / aging / vendor detail in the IT report doc.  "
-        f"·  React 👍/👎 or reply with feedback."))
+        f"{_fx_footnote()}  ·  Want detail on an action? Ask *IT Helper* — e.g. "
+        f"_“which laptops need replacing?”_, _“which vendor payments are overdue?”_, "
+        f"_“why do we need to buy laptops?”_  ·  React 👍/👎 or reply with feedback."))
     return blocks
 
 

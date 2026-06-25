@@ -106,6 +106,11 @@ def _home_view() -> dict:
             "• _How fast can we get a laptop, and from which vendor?_\n"
             "• _What's the standard laptop for a <role/department>?_\n"
             "• _Have we sold or disposed of any laptops?_"),
+        sec("*🔔 Following up on the weekly report's actions*\n"
+            "• _Which laptops need replacing? Which are most urgent?_\n"
+            "• _Why do we need to buy laptops — do we have enough spare?_\n"
+            "• _Which vendor payments are pending or overdue?_\n"
+            "• _Is the upcoming joiner's laptop ready?_"),
         {"type": "divider"},
         sec("*Handy shortcuts*\n"
             "• Just edited a sheet? Say *refresh* and I'll pull the latest numbers.\n"
