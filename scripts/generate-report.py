@@ -2102,7 +2102,12 @@ def _warn_spend_once(key: str, message: str) -> None:
 
 
 def _spend_has_data(data: dict, key) -> bool:
-    """True if any non-total row has a numeric value in the given month column."""
+    """True if the given month column has spend — either the sheet's own Total
+    row carries a value, or any line item does. (Checking the Total row matters:
+    if line cells are formulas the reader can't resolve, the month would wrongly
+    look empty and the report would fall back to an earlier month.)"""
+    if _spend_grand_total(data, key) is not None:
+        return True
     return any(_to_number(r.get(key)) is not None for r in data["spend"] if not _is_total_row(r))
 
 
@@ -2149,33 +2154,61 @@ def _spend_month_label(data: dict) -> str:
     return label if is_current else f"{label} (latest with data)"
 
 
-def get_software_spend_this_month(data: dict) -> float:
-    """Total software / subscription / license spend for the reporting month.
+def _spend_grand_total(data: dict, key) -> Optional[float]:
+    """The sheet's OWN monthly total for the given month column: the value in the
+    canonical Total / Grand Total / Sum row (the largest, if there's one per
+    sheet). This is authoritative — it matches the sheet's green Total cell, and
+    avoids re-summing line items (which can undercount when month cells are
+    formulas/text). Returns None if no total row carries a number for that month."""
+    vals = []
+    for r in data["spend"]:
+        raw = str(r.get("APPLICATION / SW / LICENSE", "") or "").strip().lower()
+        name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", raw)).strip()
+        if name in TOTAL_ROW_KEYWORDS:  # exact 'total' / 'grand total' / 'sum'
+            v = _to_number(r.get(key))
+            if v is not None:
+                vals.append(v)
+    return max(vals) if vals else None
 
-    This is the spend tracker's monthly total — the sum of every named line
-    item in that month's column. Rows with a blank APPLICATION name (e.g. the
-    sheet's own green Total row, which has no name) and explicit total rows are
-    skipped, so the figure equals the sheet total without double counting.
-    """
+
+def _spend_line_sum(data: dict, key) -> tuple:
+    """Fallback: sum the named line items for a month column (skip totals/blanks)."""
+    total, n = 0.0, 0
+    for row in data["spend"]:
+        name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
+        if not name or _is_total_row(row):
+            continue
+        v = _to_number(row.get(key))
+        if v is not None:
+            total += v
+            n += 1
+    return total, n
+
+
+def _spend_for_month(data: dict, key) -> tuple:
+    """Monthly software total: prefer the sheet's own Total row (authoritative),
+    else sum the line items. Returns (total, line_items)."""
+    if not key:
+        return 0.0, 0
+    gt = _spend_grand_total(data, key)
+    if gt is not None:
+        return gt, 0
+    return _spend_line_sum(data, key)
+
+
+def get_software_spend_this_month(data: dict) -> float:
+    """Software / subscription / license spend for the reporting month — the
+    spend tracker's own monthly Total row when present (matches the sheet's green
+    Total cell), otherwise the sum of the named line items."""
     month_key, _d, is_current = _spend_period(data)
-    total = 0.0
-    line_items = 0
-    if month_key:
-        for row in data["spend"]:
-            name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
-            if not name or _is_total_row(row):
-                continue
-            val = _to_number(row.get(month_key))
-            if val is not None:
-                total += val
-                line_items += 1
+    total, line_items = _spend_for_month(data, month_key)
     _spend_diagnostic_once(data, month_key, is_current, total, line_items)
     return total
 
 
 def get_software_spend_history(data: dict) -> dict:
-    """Month-by-month software/subscription spend this year (sum of named line
-    items per month column), up to the current month. {months, ytd}."""
+    """Month-by-month software/subscription spend this year (the sheet's own
+    monthly total, else the line-item sum), up to the current month. {months, ytd}."""
     cols = {}
     for row in data["spend"]:
         for k in row:
@@ -2186,14 +2219,7 @@ def get_software_spend_history(data: dict) -> dict:
     for key, d in sorted(cols.items(), key=lambda kv: kv[1]):
         if d.year != TODAY.year or d.month > TODAY.month:
             continue
-        total = 0.0
-        for row in data["spend"]:
-            name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
-            if not name or _is_total_row(row):
-                continue
-            v = _to_number(row.get(key))
-            if v is not None:
-                total += v
+        total, _n = _spend_for_month(data, key)
         months.append({"month": d.strftime("%b"), "spend": total})
         ytd += total
     return {"months": months, "ytd": ytd}
