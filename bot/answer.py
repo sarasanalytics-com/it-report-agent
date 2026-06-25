@@ -104,6 +104,21 @@ no Asset-History record, say the type isn't recorded rather than guessing.
 UPCOMING JOINERS — give the joining date, the laptop needed, and which checklist \
 items are still pending; judge laptop readiness by comparing the laptop needed \
 against spare stock.
+- The weekly report shows ACTION items; when she wants more detail on one, \
+answer from the report data:
+  • Procurement ("why do we need to buy laptops?", "how many should we order?", \
+"do we have enough spare laptops?") — explain it from the numbers: spare laptops \
+ready now vs the demand, which is upcoming joiners in the next 30 days PLUS \
+laptops over 3.5 years that are due for replacement. Give the shortfall and what's \
+driving it.
+  • Vendor payments ("which payments are pending or overdue?", "what do we owe \
+suppliers?", "what's overdue?") — use the Vendor Payments Pending list: each \
+vendor, the amount in ₹, the due date, and days overdue; lead with the total and \
+the most-overdue one.
+  • Aging / replacements ("which laptops need replacing?", "which are the oldest \
+or most critical?", "whose laptop is too old?") — use the Laptop Aging list: the \
+person, their laptop model, its age in years, and the recommended action, oldest \
+first.
 - For offboarding ("how many laptops are yet to be returned?", "who hasn't \
 returned their laptop?"), use LAPTOPS YET TO RETURN; for "did X return their \
 laptop?" use LAPTOP RETURNS — completed.
