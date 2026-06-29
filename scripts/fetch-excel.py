@@ -203,6 +203,24 @@ def main() -> None:
             print(f"  ✗ Vendor payments file not downloaded ({exc}); report will show "
                   f"'no vendor payments sheet connected'.", file=sys.stderr)
 
+    # Resolve any LIVE FORMULAS whose computed value isn't cached in the file
+    # (e.g. the spend tracker's monthly totals). openpyxl can't read uncached
+    # formula results, so without this the report under-counts. Best-effort.
+    _recalc_downloaded_files()
+
+
+def _recalc_downloaded_files() -> None:
+    """Fill in uncached formula values across the downloaded workbooks."""
+    try:
+        from recalc import recalc_uncached_formulas
+    except Exception as exc:  # noqa: BLE001 - missing dep shouldn't fail the fetch
+        print(f"  (formula recalc unavailable: {exc})", file=sys.stderr)
+        return
+    for xlsx in sorted(DATA_DIR.glob("*.xlsx")):
+        n = recalc_uncached_formulas(str(xlsx))
+        if n:
+            print(f"  ↻ Recalculated {n} live-formula cell(s) in {xlsx.name}.")
+
 
 if __name__ == "__main__":
     main()
