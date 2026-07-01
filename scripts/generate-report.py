@@ -1896,11 +1896,13 @@ def get_age_distribution(data: dict) -> dict:
     return buckets
 
 
-def get_laptop_spend(data: dict) -> dict:
+def get_laptop_spend(data: dict, month: Optional[int] = None) -> dict:
     """Extract laptop procurement spend from Actual Spends sheet.
 
     The sheet has columns like: Model, Joiners, Jan Joiners, Jan Spend,
-    Feb Joiners, Feb Spend, March Joiners, Mar Spend, etc.
+    Feb Joiners, Feb Spend, March Joiners, Mar Spend, etc. `month` (1-12) selects
+    which month's column to read; defaults to the current calendar month. Pass the
+    software-spend reporting month so the report's laptop figure matches its label.
     Returns dict with keys: models (list of per-model data), total_joiners, total_spend.
     """
     MONTH_ABBREVS = {
@@ -1908,7 +1910,7 @@ def get_laptop_spend(data: dict) -> dict:
         5: ["may"], 6: ["jun", "june"], 7: ["jul", "july"], 8: ["aug"],
         9: ["sep", "sept"], 10: ["oct"], 11: ["nov"], 12: ["dec"],
     }
-    abbrevs = MONTH_ABBREVS.get(TODAY.month, [])
+    abbrevs = MONTH_ABBREVS.get(month or TODAY.month, [])
 
     result = {"models": [], "total_joiners": 0, "units_this_month": 0,
               "total_spend": 0.0, "total_spend_inr": 0.0}
@@ -3332,8 +3334,12 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     aging = get_aging_laptops(data)
     critical = [a for a in aging if a["priority"] == "Critical"]
     joiners = get_joiners_with_laptop_needs(data, 30)
-    laptop_spend = get_laptop_spend(data)
     software_total = get_software_spend_this_month(data)
+    # Laptop spend for the SAME month the spend line is labelled with (the
+    # software reporting month), so "Spend (June): … laptops …" isn't reading
+    # an empty current-month column.
+    _rep_key, _rep_date, _rep_is_current = _spend_period(data)
+    laptop_spend = get_laptop_spend(data, _rep_date.month if _rep_date else None)
     vendor = get_vendor_payments(data)
 
     def _overdue_days(v) -> int:
@@ -3424,8 +3430,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     # Deltas vs the previous run's snapshot.
     stock_d = _snap_delta(stock_ready, prev_snap.get("stock_ready") if prev_snap else None)
     aging_d = _snap_delta(len(aging), prev_snap.get("aging_count") if prev_snap else None)
-    # Spend month-over-month + a partial-month flag.
-    _rep_key, _rep_date, _rep_is_current = _spend_period(data)
+    # Spend month-over-month + a partial-month flag (reporting month resolved above).
     prev_total, prev_key = _prev_month_spend(data, _rep_date)
     spend_trend = ""
     if prev_total is not None:
@@ -3449,7 +3454,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         f"over 3.5yr ({len(critical)} critical)",
         f"• *Joiners (30d):* {len(joiners)}{next_joiner}",
         f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)}{spend_trend}{partial} · "
-        f"laptops {fmt_usd(laptop_spend['total_spend'])}",
+        f"laptops {fmt_inr_full(laptop_spend['total_spend_inr'])}",
         f"• *Software YTD:* {fmt_usd(shist['ytd'])}    *Renews (30d):* {len(renewals30)}",
     ]
     blocks.append(_blk_divider())
