@@ -3405,7 +3405,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     stock_d = _snap_delta(stock_ready, prev_snap.get("stock_ready") if prev_snap else None)
     aging_d = _snap_delta(len(aging), prev_snap.get("aging_count") if prev_snap else None)
     # Spend month-over-month + a partial-month flag.
-    _rep_key, _rep_date, _ = _spend_period(data)
+    _rep_key, _rep_date, _rep_is_current = _spend_period(data)
     prev_total, prev_key = _prev_month_spend(data, _rep_date)
     spend_trend = ""
     if prev_total is not None:
@@ -3413,8 +3413,11 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             spend_trend = f" (▲ vs {fmt_usd(prev_total)})"
         elif software_total < prev_total:
             spend_trend = f" (▼ vs {fmt_usd(prev_total)})"
+    # Only flag "partial" for the CURRENT, in-progress month (a completed month
+    # shown as a fallback is fully entered, not partial). Applies to software
+    # spend only — attached to the apps figure, never the laptops one.
     partial = ""
-    if prev_key:
+    if _rep_is_current and prev_key:
         cur_n, prev_n = _month_line_item_count(data, _rep_key), _month_line_item_count(data, prev_key)
         if prev_n and cur_n < 0.6 * prev_n:
             partial = " _(may be partial)_"
@@ -3425,8 +3428,8 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         f"• *Spare laptops ready:* {stock_ready}{stock_d}    *Aging:* {len(aging)}{aging_d} "
         f"over 3.5yr ({len(critical)} critical)",
         f"• *Joiners (30d):* {len(joiners)}{next_joiner}",
-        f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)}{spend_trend} · "
-        f"laptops {fmt_usd(laptop_spend['total_spend'])}{partial}",
+        f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)}{spend_trend}{partial} · "
+        f"laptops {fmt_usd(laptop_spend['total_spend'])}",
         f"• *Software YTD:* {fmt_usd(shist['ytd'])}    *Renews (30d):* {len(renewals30)}",
     ]
     blocks.append(_blk_divider())
