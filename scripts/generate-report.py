@@ -3246,6 +3246,61 @@ def get_last_month_recap(data: dict) -> dict:
             "assigned": nj + rep, "joiners": joiners, "purchased": purchased}
 
 
+def _avg_laptop_price_inr(data: dict) -> Optional[float]:
+    """Average per-laptop price (INR) from the procurement plan's
+    'Avg Price/Laptop' column — for rough cost estimates on approvals."""
+    prices = []
+    for row in data.get("proc_plan", []):
+        for k, v in row.items():
+            kl = str(k).lower()
+            if "avg price" in kl and "laptop" in kl:
+                n = _to_number(v)
+                if n and n > 0:
+                    prices.append(n)
+                break
+    return sum(prices) / len(prices) if prices else None
+
+
+def _snap_delta(cur: int, prev) -> str:
+    """' (▲3)' / ' (▼2)' / '' — change vs the previous snapshot value."""
+    if prev is None:
+        return ""
+    try:
+        d = cur - int(prev)
+    except (TypeError, ValueError):
+        return ""
+    if d > 0:
+        return f" (▲{d})"
+    if d < 0:
+        return f" (▼{abs(d)})"
+    return ""
+
+
+def _month_line_item_count(data: dict, key) -> int:
+    """How many named (non-total) line items have a value in this month column —
+    used to flag a month that looks only partially entered."""
+    if not key:
+        return 0
+    return sum(1 for r in data["spend"]
+               if not _is_total_row(r)
+               and str(r.get("APPLICATION / SW / LICENSE", "") or "").strip()
+               and _to_number(r.get(key)) is not None)
+
+
+def _prev_month_spend(data: dict, rep_date):
+    """(total, month_key) for the calendar month before `rep_date`, else (None, None)."""
+    if not rep_date:
+        return None, None
+    pm = rep_date.replace(day=1) - timedelta(days=1)
+    for row in data["spend"]:
+        for k in row:
+            d = parse_date(k)
+            if d and d.year == pm.year and d.month == pm.month:
+                total, _ = _spend_for_month(data, k)
+                return total, k
+    return None, None
+
+
 def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> list:
     """Compact, action-first Slack post for the manager: lead with what she needs
     to decide/approve, then a one-line snapshot. The monthly post also recaps what
@@ -3295,10 +3350,15 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     action_title = "🔔 To do this month" if is_monthly else "🔔 Actions needed"
     actions = []
     need = len(joiners) + len(critical) - stock_ready
+    # Rough ₹ cost of the laptops to buy, so approvals carry a money figure.
+    avg_price = _avg_laptop_price_inr(data)
+    laptop_cost = int(round(need * avg_price)) if (need > 0 and avg_price) else None
     if need > 0:
+        cost_tag = f" — est. {fmt_inr_full(laptop_cost)}" if laptop_cost else ""
         actions.append(
-            f"🔴 *Approve buying {need} laptop(s)* — only {stock_ready} in stock vs "
-            f"{len(critical)} critical replacement(s) + {len(joiners)} joiner(s) due in 30d")
+            f"🔴 *Approve buying {need} laptop(s){cost_tag}* — only {stock_ready} in stock "
+            f"vs {len(critical)} critical replacement(s) + {len(joiners)} joiner(s) due in 30d")
+    vendor_total = vendor["total_inr"] if (vendor.get("connected") and vendor.get("pending")) else 0
     if vendor.get("connected") and vendor.get("pending"):
         oldest = max(vendor["pending"], key=_overdue_days, default=None)
         od = _overdue_days(oldest) if oldest else 0
@@ -3317,6 +3377,20 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         actions.append(
             f"🟠 *Make sure a laptop is ready for {j['name']}* — starts {when} "
             f"({j['doj'].strftime('%d %b')}); stock is tight")
+    # Stale IT requests — surface anything open longer than 14 days.
+    stale = sorted(((TODAY - i["date"]).days, i) for i in open_issues if i["date"]
+                   and (TODAY - i["date"]).days > 14)
+    if stale:
+        od, oi = stale[-1]
+        actions.append(
+            f"🟠 *{len(stale)} IT request(s) open >14 days* — oldest: "
+            f"{_truncate(oi['issue'], 45)} ({od}d)")
+    # Money at stake this month (laptops to buy + payments to release).
+    at_stake = (laptop_cost or 0) + vendor_total
+    if at_stake > 0:
+        actions.append(
+            f"💵 *Total to approve ≈ {fmt_inr_full(at_stake)}* "
+            f"({fmt_inr_full(laptop_cost or 0)} laptops + {fmt_inr_full(vendor_total)} payments)")
     if actions:
         blocks.append(_blk_section(f"*{action_title}*\n" + "\n".join(f"• {a}" for a in actions)))
     else:
@@ -3327,13 +3401,33 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
     if joiners:
         j = min(joiners, key=lambda x: x["days_until"])
         next_joiner = f" — next: {j['name']} ({j['doj'].strftime('%d %b')})"
+    # Deltas vs the previous run's snapshot.
+    stock_d = _snap_delta(stock_ready, prev_snap.get("stock_ready") if prev_snap else None)
+    aging_d = _snap_delta(len(aging), prev_snap.get("aging_count") if prev_snap else None)
+    # Spend month-over-month + a partial-month flag.
+    _rep_key, _rep_date, _ = _spend_period(data)
+    prev_total, prev_key = _prev_month_spend(data, _rep_date)
+    spend_trend = ""
+    if prev_total is not None:
+        if software_total > prev_total:
+            spend_trend = f" (▲ vs {fmt_usd(prev_total)})"
+        elif software_total < prev_total:
+            spend_trend = f" (▼ vs {fmt_usd(prev_total)})"
+    partial = ""
+    if prev_key:
+        cur_n, prev_n = _month_line_item_count(data, _rep_key), _month_line_item_count(data, prev_key)
+        if prev_n and cur_n < 0.6 * prev_n:
+            partial = " _(may be partial)_"
+    shist = get_software_spend_history(data)
+    renewals30 = get_upcoming_renewals(data, 30)
     snap = [
         f"• *Open IT tickets:* {len(open_issues)}",
-        f"• *Spare laptops ready:* {stock_ready}    *Aging:* {len(aging)} over 3.5yr "
-        f"({len(critical)} critical)",
+        f"• *Spare laptops ready:* {stock_ready}{stock_d}    *Aging:* {len(aging)}{aging_d} "
+        f"over 3.5yr ({len(critical)} critical)",
         f"• *Joiners (30d):* {len(joiners)}{next_joiner}",
-        f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)} · "
-        f"laptops {fmt_usd(laptop_spend['total_spend'])}",
+        f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)}{spend_trend} · "
+        f"laptops {fmt_usd(laptop_spend['total_spend'])}{partial}",
+        f"• *Software YTD:* {fmt_usd(shist['ytd'])}    *Renews (30d):* {len(renewals30)}",
     ]
     blocks.append(_blk_divider())
     blocks.append(_blk_section("*📊 Snapshot*\n" + "\n".join(snap)))
