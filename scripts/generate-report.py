@@ -3447,6 +3447,7 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         if prev_n and cur_n < 0.6 * prev_n:
             partial = " _(may be partial)_"
     shist = get_software_spend_history(data)
+    lhist = get_laptop_spend_history(data)
     renewals30 = get_upcoming_renewals(data, 30)
     snap = [
         f"• *Open IT tickets:* {len(open_issues)}",
@@ -3455,7 +3456,8 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
         f"• *Joiners (30d):* {len(joiners)}{next_joiner}",
         f"• *Spend ({_spend_month_label(data)}):* apps {fmt_usd(software_total)}{spend_trend}{partial} · "
         f"laptops {fmt_inr_full(laptop_spend['total_spend_inr'])}",
-        f"• *Software YTD:* {fmt_usd(shist['ytd'])}    *Renews (30d):* {len(renewals30)}",
+        f"• *YTD spend:* apps {fmt_usd(shist['ytd'])} · laptops {fmt_inr_full(lhist['ytd_spend_inr'])}"
+        f"    *Renews (30d):* {len(renewals30)}",
     ]
     blocks.append(_blk_divider())
     blocks.append(_blk_section("*📊 Snapshot*\n" + "\n".join(snap)))
