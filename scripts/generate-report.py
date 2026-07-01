@@ -219,6 +219,28 @@ def load_data() -> dict:
     proc_wb = openpyxl.load_workbook(DATA_DIR / "procurement_plan.xlsx", read_only=True, data_only=True)
     join_wb = openpyxl.load_workbook(DATA_DIR / "joiners_info.xlsx", read_only=True, data_only=True)
 
+    # Software spend: the spend tracker only *links* to a source workbook, and
+    # those external links come across blank on download (so the report used to
+    # under-count). Read the SOURCE workbook (app_spend_source.xlsx — real typed
+    # values, same 'Sheet1' layout) when it's present; else fall back to the
+    # tracker's own sheets.
+    _tracker_spend = (read_sheet(spend_wb, "Sheet1")
+                      + read_sheet(spend_wb, "Linkdin Growth Team"))
+    spend_rows = _tracker_spend
+    _src_path = DATA_DIR / "app_spend_source.xlsx"
+    if _src_path.exists():
+        try:
+            _src_wb = openpyxl.load_workbook(_src_path, read_only=True, data_only=True)
+            _src_rows = read_sheet(_src_wb, "Sheet1")
+            _src_wb.close()
+            if _src_rows:
+                spend_rows = _src_rows
+                print(f"  Software spend: using source workbook "
+                      f"app_spend_source.xlsx ({len(_src_rows)} rows).", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - fall back to the tracker
+            print(f"  Warning: could not read app_spend_source.xlsx ({exc}); "
+                  f"using spend_tracker.xlsx.", file=sys.stderr)
+
     data = {
         "assigned": read_sheet(asset_wb, "Laptop Assigned"),
         "in_stock": read_sheet(asset_wb, "Laptop in stock"),
@@ -235,10 +257,9 @@ def load_data() -> dict:
         "docking": read_sheet(asset_wb, "Docking station"),
         "monitor": read_sheet(asset_wb, "Monitor"),
         "other_stock": read_sheet(asset_wb, "Other Assets Instock"),
-        # Main subscriptions sheet + the extra 'Linkdin Growth Team' apps so the
-        # software total/inventory is complete.
-        "spend": (read_sheet(spend_wb, "Sheet1")
-                  + read_sheet(spend_wb, "Linkdin Growth Team")),
+        # Software subscriptions — from the source workbook when available
+        # (real values), else the spend tracker's own sheets (see above).
+        "spend": spend_rows,
         "joinings": read_sheet(join_wb, "Joinings"),
         "checklist": read_sheet(join_wb, "Joining checklist"),
         "proc_plan": read_sheet(proc_wb, "Laptop procurement plan", header_row=2),
@@ -2102,11 +2123,13 @@ def _warn_spend_once(key: str, message: str) -> None:
 
 
 def _spend_has_data(data: dict, key) -> bool:
-    """True if the given month column has spend — either the sheet's own Total
-    row carries a value, or any line item does. (Checking the Total row matters:
-    if line cells are formulas the reader can't resolve, the month would wrongly
-    look empty and the report would fall back to an earlier month.)"""
-    if _spend_grand_total(data, key) is not None:
+    """True if the given month column has REAL spend — the sheet's own Total row
+    carries a value > 0, or a non-total line item does. A month whose only value
+    is a zero total (e.g. the current month before anything is entered) counts as
+    no data, so the report falls back to the latest month that actually has spend
+    rather than showing $0."""
+    gt = _spend_grand_total(data, key)
+    if gt is not None and gt > 0:
         return True
     return any(_to_number(r.get(key)) is not None for r in data["spend"] if not _is_total_row(r))
 
