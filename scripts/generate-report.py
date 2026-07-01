@@ -3378,10 +3378,10 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             f"🟠 *Make sure a laptop is ready for {j['name']}* — starts {when} "
             f"({j['doj'].strftime('%d %b')}); stock is tight")
     # Stale IT requests — surface anything open longer than 14 days.
-    stale = sorted(((TODAY - i["date"]).days, i) for i in open_issues if i["date"]
-                   and (TODAY - i["date"]).days > 14)
+    stale = [i for i in open_issues if i["date"] and (TODAY - i["date"]).days > 14]
     if stale:
-        od, oi = stale[-1]
+        oi = max(stale, key=lambda i: (TODAY - i["date"]).days)
+        od = (TODAY - oi["date"]).days
         actions.append(
             f"🟠 *{len(stale)} IT request(s) open >14 days* — oldest: "
             f"{_truncate(oi['issue'], 45)} ({od}d)")
