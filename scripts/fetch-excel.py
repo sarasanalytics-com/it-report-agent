@@ -52,6 +52,14 @@ VENDOR_FILE_PATH = os.environ.get("VENDOR_FILE_PATH") or (
     "anudeep_kolla_sarasanalytics_com/"
     "IQDQYmpYThX_TqjxmCahWDEWAVPwYQoCmoYrI93oeGnzsLQ?e=NuL9Qc"
 )
+# App-spend SOURCE workbook — where subscription amounts are typed as real
+# values. The spend tracker only *links* to this, and those links don't survive
+# download, so we read this source directly for the software-spend figure.
+APP_SPEND_SOURCE_PATH = os.environ.get("APP_SPEND_SOURCE_PATH") or (
+    "https://sarasanalytics0-my.sharepoint.com/:x:/g/personal/"
+    "anudeep_kolla_sarasanalytics_com/"
+    "IQAQy3EZvdXUSoaMipxhJNDnAW18Edf5nSvr-qkgdz54tmY?e=JbsEhr"
+)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "data"
@@ -203,23 +211,12 @@ def main() -> None:
             print(f"  ✗ Vendor payments file not downloaded ({exc}); report will show "
                   f"'no vendor payments sheet connected'.", file=sys.stderr)
 
-    # Resolve any LIVE FORMULAS whose computed value isn't cached in the file
-    # (e.g. the spend tracker's monthly totals). openpyxl can't read uncached
-    # formula results, so without this the report under-counts. Best-effort.
-    _recalc_downloaded_files()
-
-
-def _recalc_downloaded_files() -> None:
-    """Fill in uncached formula values across the downloaded workbooks."""
-    try:
-        from recalc import recalc_uncached_formulas
-    except Exception as exc:  # noqa: BLE001 - missing dep shouldn't fail the fetch
-        print(f"  (formula recalc unavailable: {exc})", file=sys.stderr)
-        return
-    for xlsx in sorted(DATA_DIR.glob("*.xlsx")):
-        n = recalc_uncached_formulas(str(xlsx))
-        if n:
-            print(f"  ↻ Recalculated {n} live-formula cell(s) in {xlsx.name}.")
+    # Best-effort: the app-spend SOURCE workbook (real typed amounts).
+    if APP_SPEND_SOURCE_PATH:
+        try:
+            download_file(token, APP_SPEND_SOURCE_PATH, DATA_DIR / "app_spend_source.xlsx")
+        except requests.HTTPError as exc:
+            print(f"  ✗ App-spend source not downloaded ({exc}).", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,13 @@ FILES = [
     "procurement_plan.xlsx",
     "joiners_info.xlsx",
     "vendor_payments.xlsx",
+    "app_spend_source.xlsx",
 ]
+
+# For these files, also print per-column numeric COUNT + SUM (aggregates only,
+# no individual values) so we can locate money columns and confirm the amounts
+# are real numbers rather than unresolved links.
+VALUE_PROFILE_FILES = {"app_spend_source.xlsx"}
 
 
 def _header_row(ws):
@@ -46,12 +52,24 @@ def main() -> None:
             print(f"  ERROR opening: {exc}")
             continue
         print(f"  sheets: {wb.sheetnames}")
+        profile = fname in VALUE_PROFILE_FILES
         for sheet in wb.sheetnames:
             ws = wb[sheet]
             hdr_idx, headers = _header_row(ws)
-            n_rows = sum(1 for _ in ws.iter_rows(min_row=1, values_only=True))
-            print(f"\n  -- sheet: {sheet!r}  (~{n_rows} rows, header looks like row {hdr_idx})")
+            rows = list(ws.iter_rows(min_row=1, values_only=True))
+            print(f"\n  -- sheet: {sheet!r}  (~{len(rows)} rows, header looks like row {hdr_idx})")
             print(f"     columns: {headers}")
+            if profile and rows:
+                # Per-column numeric count + sum (aggregates only — no cell values).
+                hdr = rows[hdr_idx - 1] if hdr_idx and hdr_idx <= len(rows) else rows[0]
+                width = max((len(r) for r in rows), default=0)
+                print("     numeric profile (col: header → count, sum):")
+                for c in range(width):
+                    nums = [r[c] for r in rows[hdr_idx:] if c < len(r)
+                            and isinstance(r[c], (int, float)) and not isinstance(r[c], bool)]
+                    if nums:
+                        h = hdr[c] if c < len(hdr) and hdr[c] is not None else f"col{c}"
+                        print(f"       [{c}] {str(h)[:30]!r} → {len(nums)} nums, sum={round(sum(nums), 2)}")
         wb.close()
 
 
