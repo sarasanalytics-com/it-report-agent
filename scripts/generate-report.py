@@ -3194,10 +3194,40 @@ def _blk_named_section(title: str, lines: list, empty: str) -> list:
     return [_blk_divider(), _blk_section(f"{title}\n{body}")]
 
 
+def get_last_month_recap(data: dict) -> dict:
+    """What happened last calendar month — for the monthly report: laptops
+    assigned (new-joiner vs replacement), new joiners onboarded, laptops bought."""
+    first_of_this = TODAY.replace(day=1)
+    end_prev = first_of_this - dt.timedelta(days=1)
+    y, m = end_prev.year, end_prev.month
+
+    def _in(d):
+        return bool(d) and d.year == y and d.month == m
+
+    nj = rep = 0
+    for row in data.get("history", []):
+        if _in(parse_date(row.get("Assigned Date"))):
+            t = str(row.get("New Joiner/Replacement", "") or "").lower()
+            if "replace" in t:
+                rep += 1
+            elif "join" in t or "new" in t:
+                nj += 1
+    joiners = []
+    for row in data.get("joinings", []):
+        if _in(parse_date(row.get("Confirm DOJ") or row.get("DOJ As per Offer letter"))):
+            joiners.append(str(row.get("Employee name") or row.get("Employee Name")
+                               or row.get("Name") or "").strip() or "Unknown")
+    purchased = sum(1 for row in data.get("purchased", [])
+                    if _in(parse_date(row.get("Warranty Start Date"))))
+    return {"month": end_prev.strftime("%B"), "new_joiner": nj, "replacement": rep,
+            "assigned": nj + rep, "joiners": joiners, "purchased": purchased}
+
+
 def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> list:
     """Compact, action-first Slack post for the manager: lead with what she needs
-    to decide/approve, then a one-line snapshot. Full detail lives in the report
-    doc. Falls back to the text summary for notifications."""
+    to decide/approve, then a one-line snapshot. The monthly post also recaps what
+    was done last month. Full detail lives in the report doc."""
+    is_monthly = period.strip().lower().startswith("month")
     issues = get_it_issues(data)
     open_issues = [i for i in issues["issues"] if i["is_open"]]
     stock_ready = len(data["in_stock"])
@@ -3214,7 +3244,32 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
 
     blocks = [_blk_header(f"📋 IT {period} — {TODAY.strftime('%d %b %Y')}")]
 
-    # ── Actions needed (the lead — only things the manager must act on) ──
+    # ── Done last month (monthly report only) ──
+    if is_monthly:
+        r = get_last_month_recap(data)
+        done = []
+        if r["assigned"]:
+            parts = []
+            if r["new_joiner"]:
+                parts.append(f"{r['new_joiner']} new joiner")
+            if r["replacement"]:
+                parts.append(f"{r['replacement']} replacement")
+            done.append(f"• Assigned *{r['assigned']}* laptop(s)"
+                        + (f" — {', '.join(parts)}" if parts else ""))
+        if r["joiners"]:
+            names = ", ".join(r["joiners"][:6]) + (
+                f" +{len(r['joiners']) - 6} more" if len(r["joiners"]) > 6 else "")
+            done.append(f"• Onboarded *{len(r['joiners'])}* new joiner(s): {names}")
+        if r["purchased"]:
+            done.append(f"• Purchased *{r['purchased']}* laptop(s)")
+        if not done:
+            done = ["• Quiet month — no new assignments, joiners or purchases recorded."]
+        blocks.append(_blk_section(f"*✅ Done in {r['month']}*\n" + "\n".join(done)))
+        blocks.append(_blk_divider())
+
+    # ── Actions / to-dos (the lead — only things the manager must act on) ──
+    period_word = "this month" if is_monthly else "this week"
+    action_title = "🔔 To do this month" if is_monthly else "🔔 Actions needed"
     actions = []
     need = len(joiners) + len(critical) - stock_ready
     if need > 0:
@@ -3240,9 +3295,9 @@ def build_report_blocks(data: dict, prev_snap: Optional[dict], period: str) -> l
             f"🟠 *Make sure a laptop is ready for {j['name']}* — starts {when} "
             f"({j['doj'].strftime('%d %b')}); stock is tight")
     if actions:
-        blocks.append(_blk_section("*🔔 Actions needed*\n" + "\n".join(f"• {a}" for a in actions)))
+        blocks.append(_blk_section(f"*{action_title}*\n" + "\n".join(f"• {a}" for a in actions)))
     else:
-        blocks.append(_blk_section("*🔔 Actions needed*\n• ✅ Nothing needs your attention this week."))
+        blocks.append(_blk_section(f"*{action_title}*\n• ✅ Nothing needs your attention {period_word}."))
 
     # ── Snapshot (everything else, one line each) ──
     next_joiner = ""
