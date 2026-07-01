@@ -2085,7 +2085,7 @@ def get_purchases_by_vendor(data: dict) -> dict:
 # Row names in spend tracker that are laptop/hardware costs, not app subscriptions
 # Match the specific hardware-procurement row name(s) — not loose substrings
 # like "laptop", which could catch Microsoft Surface Laptop etc.
-HARDWARE_SPEND_KEYWORDS = ["laptops procurement"]
+HARDWARE_SPEND_KEYWORDS = ["laptops procurement", "laptop procurement"]
 # Row names that are aggregate/total rows (would double-count if summed).
 TOTAL_ROW_KEYWORDS = ["total", "grand total", "sum"]
 # A row is also a total/aggregate if its name BEGINS like one (e.g. "Total Cost",
@@ -2094,8 +2094,25 @@ _TOTAL_PREFIXES = ("total", "grand total", "sub total", "subtotal")
 
 
 def _is_hardware_row(row: dict) -> bool:
+    """A laptop-procurement / hardware row — NOT an app subscription. Kept out of
+    the software-spend total (it's tracked separately in the IT budget). Matches
+    'laptop' together with 'procure' (covers 'Laptop procurement', 'Laptops
+    Procured') plus the explicit keywords."""
     app_name = str(row.get("APPLICATION / SW / LICENSE", "")).lower()
+    if "laptop" in app_name and "procure" in app_name:
+        return True
     return any(kw in app_name for kw in HARDWARE_SPEND_KEYWORDS)
+
+
+def _hardware_sum(data: dict, key) -> float:
+    """Sum of laptop-procurement/hardware line items for a month column."""
+    total = 0.0
+    for row in data["spend"]:
+        if _is_hardware_row(row) and not _is_total_row(row):
+            v = _to_number(row.get(key))
+            if v is not None:
+                total += v
+    return total
 
 
 def _is_total_row(row: dict) -> bool:
@@ -2195,11 +2212,12 @@ def _spend_grand_total(data: dict, key) -> Optional[float]:
 
 
 def _spend_line_sum(data: dict, key) -> tuple:
-    """Fallback: sum the named line items for a month column (skip totals/blanks)."""
+    """Fallback: sum the named SOFTWARE line items for a month column (skip
+    totals, blanks, and laptop-procurement/hardware rows)."""
     total, n = 0.0, 0
     for row in data["spend"]:
         name = str(row.get("APPLICATION / SW / LICENSE", "") or "").strip()
-        if not name or _is_total_row(row):
+        if not name or _is_total_row(row) or _is_hardware_row(row):
             continue
         v = _to_number(row.get(key))
         if v is not None:
@@ -2209,13 +2227,15 @@ def _spend_line_sum(data: dict, key) -> tuple:
 
 
 def _spend_for_month(data: dict, key) -> tuple:
-    """Monthly software total: prefer the sheet's own Total row (authoritative),
-    else sum the line items. Returns (total, line_items)."""
+    """Monthly SOFTWARE spend: prefer the sheet's own Total row (authoritative)
+    minus any laptop-procurement/hardware line items (those belong to the IT
+    budget, not software), else sum the software line items. Returns
+    (total, line_items)."""
     if not key:
         return 0.0, 0
     gt = _spend_grand_total(data, key)
     if gt is not None:
-        return gt, 0
+        return max(gt - _hardware_sum(data, key), 0.0), 0
     return _spend_line_sum(data, key)
 
 
